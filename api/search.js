@@ -1,45 +1,75 @@
 // GET /api/search?q=Bridgerton&limit=20
-// Scrapes the actual search pages on netnaija.film, officialmoviebox.com, movieboxonline.net.
-// Returns results in the SAME ORDER as the source site (no re-sorting).
+// Scrapes the actual search pages. Returns results in source order (no re-sorting).
 
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
-function norm(s) {
-  if (!s) return null;
-  return {
-    title: s.title || "",
-    subjectId: String(s.subjectId || s.id || ""),
-    subjectType: s.subjectType,
-    detailPath: s.detailPath || "",
-    type: s.subjectType === 1 ? "movie" : (s.subjectType === 2 ? "tv" : "other"),
-    genre: s.genre || "",
-    imdbRating: s.imdbRatingValue || s.imdbRating || "",
-    imdbRatingCount: s.imdbRatingCount || 0,
-    country: s.countryName || "",
-    description: s.description || "",
-    releaseDate: s.releaseDate || "",
-    duration: s.duration || 0,
-    cover: s.cover?.url || (typeof s.cover === "string" ? s.cover : "") || "",
-    hasResource: s.hasResource || false,
-  };
+function resolveNuxt(nuxt, obj) {
+  // NUXT_DATA stores objects with integer values that reference array indices.
+  // This function resolves those references to get actual values.
+  if (obj === null || obj === undefined) return null;
+  if (typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(v => resolveNuxt(nuxt, v));
+  
+  const result = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (typeof val === "number" && val >= 0 && val < nuxt.length) {
+      // This is a reference to another array item
+      const resolved = nuxt[val];
+      if (typeof resolved === "object" && resolved !== null) {
+        result[key] = resolveNuxt(nuxt, resolved);
+      } else {
+        result[key] = resolved;
+      }
+    } else if (typeof val === "object" && val !== null) {
+      result[key] = resolveNuxt(nuxt, val);
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
 }
 
 function extractSubjectsFromNuxt(nuxt) {
   const results = [];
   const seen = new Set();
-  function walk(o) {
-    if (!o || typeof o !== "object") return;
-    if (Array.isArray(o)) { o.forEach(walk); return; }
-    if (o.subjectId && o.title && o.detailPath) {
-      const sid = String(o.subjectId);
-      if (!seen.has(sid)) {
-        seen.add(sid);
-        results.push(norm(o));
+  
+  // Walk the nuxt array looking for subject-like objects
+  for (let i = 0; i < nuxt.length; i++) {
+    const item = nuxt[i];
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    
+    // Check if this looks like a subject (has subjectId or detailPath)
+    const hasSubjectId = "subjectId" in item || "subjectID" in item;
+    const hasDetailPath = "detailPath" in item;
+    const hasTitle = "title" in item;
+    
+    if ((hasSubjectId || hasDetailPath) && hasTitle) {
+      // Resolve all references
+      const resolved = resolveNuxt(nuxt, item);
+      if (resolved.title && resolved.detailPath) {
+        const sid = String(resolved.subjectId || resolved.id || resolved.detailPath);
+        if (!seen.has(sid)) {
+          seen.add(sid);
+          results.push({
+            title: String(resolved.title || ""),
+            subjectId: String(resolved.subjectId || resolved.id || ""),
+            subjectType: resolved.subjectType,
+            detailPath: String(resolved.detailPath || ""),
+            type: resolved.subjectType === 1 ? "movie" : (resolved.subjectType === 2 ? "tv" : "other"),
+            genre: resolved.genre || "",
+            imdbRating: resolved.imdbRatingValue || resolved.imdbRating || "",
+            imdbRatingCount: resolved.imdbRatingCount || 0,
+            country: resolved.countryName || "",
+            description: resolved.description || "",
+            releaseDate: resolved.releaseDate || "",
+            duration: resolved.duration || 0,
+            cover: resolved.cover?.url || (typeof resolved.cover === "string" ? resolved.cover : "") || "",
+            hasResource: resolved.hasResource || false,
+          });
+        }
       }
     }
-    Object.values(o).forEach(walk);
   }
-  walk(nuxt);
   return results;
 }
 
@@ -55,7 +85,6 @@ export default async function handler(req, res) {
   const seen = new Set();
   const results = [];
 
-  // Try netnaija first (primary source), then others as fallback
   const sites = [
     `https://netnaija.film/search-result?keyword=${encoded}`,
     `https://officialmoviebox.com/newWeb/searchResult?keyword=${encoded}`,
@@ -80,12 +109,10 @@ export default async function handler(req, res) {
           results.push(s);
         }
       }
-      // If we got results from netnaija, use those (preserve their order)
-      if (results.length > 0) break;
+      if (results.length > 0) break; // Use first site that returns results
     } catch {}
   }
 
-  // Return in source order (no re-sorting)
   res.status(200).json({
     query: q,
     count: Math.min(results.length, limit),
