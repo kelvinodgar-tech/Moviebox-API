@@ -991,3 +991,204 @@ main { flex: 1 0 auto; }
 }
 .suggest-item:last-child { border-bottom: none; }
 .suggest-item:hover, .suggest-item:focus { background: var(--bg-hover); color: var(--accent); }
+
+/* === MOBILE OPTIMIZATIONS === */
+
+/* Lazy load cards for performance */
+.movie-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 200px 300px;
+}
+
+/* Smaller cards on mobile - 2 columns */
+@media (max-width: 480px) {
+  .movie-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 6px !important;
+  }
+  .movie-card {
+    min-width: 0 !important;
+  }
+  .movie-card img {
+    border-radius: 6px;
+  }
+  .movie-card-title {
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+    max-height: 2.6em !important;
+    overflow: hidden;
+  }
+  .movie-card-rating {
+    font-size: 10px !important;
+  }
+  .movie-card-badge {
+    font-size: 8px !important;
+    padding: 1px 4px !important;
+  }
+}
+
+/* 3 columns on small tablets */
+@media (min-width: 481px) and (max-width: 768px) {
+  .movie-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 8px !important;
+  }
+}
+
+/* 4 columns on tablets */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .movie-grid {
+    grid-template-columns: repeat(4, 1fr) !important;
+  }
+}
+
+/* 5 columns on desktop */
+@media (min-width: 1025px) and (max-width: 1440px) {
+  .movie-grid {
+    grid-template-columns: repeat(5, 1fr) !important;
+  }
+}
+
+/* 6 columns on large screens */
+@media (min-width: 1441px) {
+  .movie-grid {
+    grid-template-columns: repeat(6, 1fr) !important;
+  }
+}
+
+/* Smaller hero on mobile */
+@media (max-width: 768px) {
+  .hero {
+    height: 50vh !important;
+    min-height: 280px !important;
+  }
+  .hero-content h1 {
+    font-size: 1.5rem !important;
+  }
+  .hero-content p {
+    font-size: 0.8rem !important;
+    -webkit-line-clamp: 2 !important;
+  }
+}
+
+/* Better video player on mobile */
+@media (max-width: 768px) {
+  .modal {
+    padding: 0 !important;
+  }
+  .modal-content {
+    border-radius: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 100vh !important;
+    height: 100vh !important;
+  }
+  .modal-body {
+    padding: 0 !important;
+  }
+  .modal-body video {
+    max-height: 40vh !important;
+    border-radius: 0 !important;
+  }
+  .quality-bar {
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+  }
+  .quality-btn {
+    font-size: 12px !important;
+    padding: 6px 10px !important;
+    min-height: 36px !important;
+  }
+}
+
+/* Compact header on mobile */
+@media (max-width: 768px) {
+  .header {
+    padding: 8px 12px !important;
+  }
+  .header h1, .header .logo {
+    font-size: 1.1rem !important;
+  }
+  .header input {
+    max-width: 180px !important;
+    font-size: 14px !important;
+  }
+}
+
+/* Reduce section padding on mobile */
+@media (max-width: 768px) {
+  .home-section {
+    padding: 12px 8px !important;
+  }
+  .section-title {
+    font-size: 1rem !important;
+    margin-bottom: 8px !important;
+  }
+}
+
+/* Detail page mobile fixes */
+@media (max-width: 768px) {
+  .detail-hero {
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+  .detail-cover {
+    width: 120px !important;
+    height: 180px !important;
+    margin: 0 auto !important;
+  }
+  .detail-info {
+    text-align: center !important;
+  }
+  .detail-info h1 {
+    font-size: 1.3rem !important;
+  }
+  .detail-meta {
+    justify-content: center !important;
+    flex-wrap: wrap !important;
+  }
+  .cast-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 8px !important;
+  }
+  .cast-card img {
+    width: 80px !important;
+    height: 80px !important;
+  }
+  .cast-card-name {
+    font-size: 11px !important;
+  }
+  .dub-bar {
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+  }
+  .dub-btn {
+    font-size: 11px !important;
+    padding: 4px 8px !important;
+  }
+  .episode-list {
+    max-height: 400px !important;
+  }
+  .episode-item {
+    padding: 8px !important;
+  }
+}
+
+/* Touch target sizes for mobile */
+@media (max-width: 768px) {
+  button, .btn, .quality-btn, .dub-btn, .season-btn {
+    min-height: 44px !important;
+    min-width: 44px !important;
+  }
+}
+
+/* Performance: reduce shadows and effects on mobile */
+@media (max-width: 768px) {
+  .movie-card {
+    box-shadow: none !important;
+  }
+  .movie-card:hover {
+    transform: none !important;
+    box-shadow: none !important;
+  }
+}

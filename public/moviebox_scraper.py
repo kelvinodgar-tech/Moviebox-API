@@ -12,64 +12,34 @@ backend (h5-api.aoneroom.com) which powers:
 All 3 sites share the same backend; the --site flag just changes the Origin/Referer
 headers used for CORS.
 
-ENDPOINTS:
-  1. /wefeed-h5api-bff/subject/play (direct on h5-api.aoneroom.com)
-     - Returns ALL qualities (360P/480P/720P/1080P) when called FRESH
-     - 1080P is FREE here (URL is returned, not VIP-locked)
-     - IP-rate-limited: 1 successful call per ~2-3 minutes per IP
-     - This is what the "Watch Free" button calls inline
+IMPORTANT: The MP4 URLs returned by the API require a Referer header
+(Referer: https://netnaija.film/) to download. Without it, the CDN returns
+HTTP 429. When using the hosted API at moviebox-api-eight.vercel.app,
+use the /api/stream and /api/download proxy endpoints which inject the
+Referer header server-side.
 
-  2. /wefeed-h5api-bff/subject/download (MUST be called via site proxy)
-     - Returns ALL qualities but 1080P is marked vipLocked=true with empty URL
-     - More reliable for bulk scraping
-     - This is what the "Download This Video" panel calls
+HOSTED API ENDPOINTS:
+  GET /api/trending?limit=10          - trending movies/shows
+  GET /api/search?q=query&limit=20    - search (combines suggest + trending + home)
+  GET /api/home                       - full home page content
+  GET /api/details/:detailPath        - full details (synopsis, cast, dubs, trailer)
+  GET /api/seasons/:detailPath        - TV seasons info (episodes, resolutions)
+  GET /api/movie/:detailPath          - movie quality URLs (360P/480P/720P/1080P)
+  GET /api/tv/:detailPath?s=1&e=1     - TV episode quality URLs
+  GET /api/captions/:detailPath?s=1&e=1 - subtitle URLs (13+ languages)
+  GET /api/stream?url=<encoded>       - stream proxy (injects Referer, handles Range)
+  GET /api/download?url=<enc>&f=name  - download proxy (injects Referer, sets attachment)
 
-STRATEGY:
-  - For single movies/episodes: try /play first (gets 1080P free)
-  - For bulk scraping: use /download via site proxy (more reliable)
-  - Add delay between calls to avoid IP rate-limiting
+AUDIO/DUBS:
+  The /api/details endpoint returns a "dubs" array with alternative audio tracks.
+  Each dub has its own detailPath. To get video URLs for a dubbed version,
+  call /api/movie or /api/tv with the dub's detailPath instead of the original.
 
-OUTPUT: JSON file with all quality URLs for each movie/episode.
+SUBTITLES:
+  The /api/captions endpoint returns signed subtitle URLs for 13+ languages.
+  These URLs do NOT require a Referer header and can be used directly.
 
-DOWNLOADING THE ACTUAL MP4
---------------------------
-The signed MP4 URLs returned by /play and /download are served from
-bcdnxw.hakunaymatata.com. That CDN rejects requests that do not carry
-`Referer: https://netnaija.film/` with HTTP 429 (Too Many Requests).
-
-This means:
-  - `curl -O <mp4-url>` and `wget <mp4-url>` will FAIL with 429.
-  - A browser <video src="<mp4-url>"> will also FAIL (it cannot set the
-    Referer for a cross-origin resource).
-
-To download the bytes, you must either:
-  a) Send the Referer header yourself, e.g.:
-       curl -H "Referer: https://netnaija.film/" -O <mp4-url>
-  b) Use the hosted /api/stream proxy which adds the header for you:
-       curl -O "https://moviebox-api-eight.vercel.app/api/stream?url=<encoded-mp4-url>"
-     Use stream_via_proxy() in this file to build that URL, or
-     download_via_proxy() to fetch the bytes directly through the proxy.
-
-The proxy only forwards requests to the known media CDN hosts
-(bcdnxw.hakunaymatata.com, cacdn.hakunaymatata.com, macdn.aoneroom.com,
-pbcdnw.aoneroom.com).
-
-LIBRARY FUNCTIONS
------------------
-This file is also importable as a module. Key helpers:
-
-  get_subject_detail(detail_path)        -> dict (synopsis, cast, dubs, trailer, ...)
-  get_seasons(detail_path)               -> list[dict] (season, maxEp, resolutions)
-  get_dubs(detail_path)                  -> list[dict] (lanName, lanCode, type, ...)
-  get_captions(video_id, subject_id, detail_path) -> list[dict]
-  get_play_qualities(subject_id, detail_path, se, ep) -> list[dict]
-  get_download_qualities(subject_id, detail_path, se, ep) -> list[dict]
-  fetch_all_qualities(subject_id, detail_path, se, ep) -> (list[dict], source)
-  stream_url_via_proxy(mp4_url, api_base)  -> str (proxied URL)
-  download_via_proxy(mp4_url, api_base, out_path) -> str (saved path)
-
-CLI USAGE
----------
+USAGE:
   # Single movie (gets all qualities incl 1080P free)
   python moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o
 
@@ -79,7 +49,7 @@ CLI USAGE
   # Top N trending
   python moviebox_scraper.py --trending --limit 10 --max-episodes 2
 
-  # Search home page (since /subject/search needs a token now)
+  # Search home page by title
   python moviebox_scraper.py --search "all american" --limit 5
 
   # Switch site (same backend, different Origin)
@@ -87,9 +57,6 @@ CLI USAGE
 
   # Increase delay to avoid rate-limit (default 3s)
   python moviebox_scraper.py --trending --limit 20 --delay 5
-
-  # Custom output path
-  python moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o --out ~/Downloads/opp.json
 """
 from __future__ import annotations
 
@@ -105,37 +72,27 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-# ==================== CONFIG ====================
-
-# Backend API (shared by all 3 sites)
 API = "https://h5-api.aoneroom.com"
 
-# The 3 known frontend sites (all proxy the same backend)
-SITES: dict[str, str] = {
+SITES = {
     "netnaija":         "https://netnaija.film",
     "movieboxonline":   "https://movieboxonline.net",
     "officialmoviebox": "https://officialmoviebox.com",
 }
 
-# Browser-like UA (the API checks Sec-Fetch-* headers and tolerates desktop Chrome)
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 )
 
-# Default output directory
 DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "moviebox_urls.json")
 
-# SSL context (skip cert verification - some CDN nodes have weird certs)
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
 
-# ==================== HTTP LAYER ====================
-
-def _build_headers(origin: str, referer: str | None = None, same_origin: bool = False) -> dict[str, str]:
-    """Build browser-like request headers. Same-origin matters for the site-proxy calls."""
+def _build_headers(origin, referer=None, same_origin=False):
     host = urllib.parse.urlparse(origin).hostname or ""
     return {
         "User-Agent": UA,
@@ -147,15 +104,10 @@ def _build_headers(origin: str, referer: str | None = None, same_origin: bool = 
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-origin" if same_origin else "cross-site",
-        "Sec-Ch-Ua": '"Not?A_Brand";v="24", "Chromium";v="152"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Linux"',
     }
 
 
-def http_get_json(url: str, origin: str, referer: str | None = None) -> dict[str, Any]:
-    """GET a URL and return parsed JSON. Raises urllib.error.HTTPError on failure."""
-    # If the URL is on the same host as origin, mark same-origin (needed for site-proxy calls)
+def http_get_json(url, origin, referer=None):
     same_origin = (urllib.parse.urlparse(url).hostname == urllib.parse.urlparse(origin).hostname)
     headers = _build_headers(origin, referer, same_origin=same_origin)
     req = urllib.request.Request(url, headers=headers)
@@ -163,34 +115,30 @@ def http_get_json(url: str, origin: str, referer: str | None = None) -> dict[str
         return json.loads(resp.read())
 
 
-# ==================== API ENDPOINTS ====================
-
-def get_trending(per_page: int = 20, page: int = 1, origin: str = "https://netnaija.film") -> list[dict]:
-    """GET /wefeed-h5api-bff/subject/trending - top trending movies/shows."""
+def get_trending(per_page=20, page=1, origin="https://netnaija.film"):
     url = f"{API}/wefeed-h5api-bff/subject/trending?page={page}&perPage={per_page}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {}).get("subjectList", []) or r.get("data", [])
 
 
-def get_home(origin: str = "https://netnaija.film") -> dict[str, Any]:
-    """GET /wefeed-h5api-bff/home - full home page with ~600 subjects across categories."""
+def get_home(origin="https://netnaija.film"):
     host = urllib.parse.urlparse(origin).hostname
     url = f"{API}/wefeed-h5api-bff/home?host={host}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {})
 
 
-def get_play_qualities(subject_id: str, detail_path: str, se: int = 0, ep: int = 0,
-                       origin: str = "https://netnaija.film") -> list[dict]:
-    """
-    GET /wefeed-h5api-bff/subject/play (direct on h5-api.aoneroom.com)
+def get_subject_detail(detail_path, origin="https://netnaija.film"):
+    """Get full details including synopsis, cast, dubs, seasons, trailer."""
+    url = f"{API}/wefeed-h5api-bff/detail?detailPath={urllib.parse.quote(detail_path)}"
+    r = http_get_json(url, origin=origin)
+    return r.get("data", {})
 
-    Returns ALL qualities (360/480/720/1080) when called FRESH.
-    1080P is FREE here (URL is included).
-    IP-rate-limited: 1 successful call per ~2-3 min per IP.
 
-    Returns list of: {resolution, size_mb, duration_sec, codec, vipLocked, url, video_id}
-    """
+def get_play_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netnaija.film"):
+    """Get all quality URLs (incl 1080P free) from /subject/play.
+    Note: IP-rate-limited (1 success per ~2-3 min).
+    URLs require Referer: https://netnaija.film/ to download."""
     url = (f"{API}/wefeed-h5api-bff/subject/play"
            f"?subjectId={subject_id}&se={se}&ep={ep}&detailPath={urllib.parse.quote(detail_path)}")
     referer = f"{origin}/videoPlayPage/{detail_path}?type=/movie/detail"
@@ -202,16 +150,10 @@ def get_play_qualities(subject_id: str, detail_path: str, se: int = 0, ep: int =
     return [_normalize_stream(s) for s in streams]
 
 
-def get_download_qualities(subject_id: str, detail_path: str, se: int = 0, ep: int = 0,
-                           origin: str = "https://netnaija.film") -> list[dict]:
-    """
-    GET /wefeed-h5api-bff/subject/download (MUST be called via site proxy, e.g. netnaija.film)
-
-    Returns ALL qualities but 1080P is marked vipLocked=true with empty URL.
-    More reliable for bulk scraping (less aggressive rate-limiting than /play).
-
-    Returns list of: {resolution, size_mb, duration_sec, codec, vipLocked, url, video_id}
-    """
+def get_download_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netnaija.film"):
+    """Get quality URLs from /subject/download (via site proxy).
+    1080P is vipLocked. More reliable for bulk scraping.
+    URLs require Referer: https://netnaija.film/ to download."""
     path = (f"/wefeed-h5api-bff/subject/download"
             f"?subjectId={subject_id}&se={se}&ep={ep}&detailPath={urllib.parse.quote(detail_path)}")
     url = f"{origin}{path}"
@@ -224,9 +166,8 @@ def get_download_qualities(subject_id: str, detail_path: str, se: int = 0, ep: i
     return [_normalize_stream(d) for d in downloads]
 
 
-def get_captions(video_id: str, subject_id: str, detail_path: str,
-                 origin: str = "https://netnaija.film") -> list[dict]:
-    """GET /wefeed-h5api-bff/subject/caption - list of subtitle URLs (signed CloudFront URLs)."""
+def get_captions(video_id, subject_id, detail_path, origin="https://netnaija.film"):
+    """Get subtitle URLs (13+ languages). These URLs do NOT need Referer."""
     url = (f"{API}/wefeed-h5api-bff/subject/caption"
            f"?format=MP4&id={video_id}&subjectId={subject_id}&detailPath={urllib.parse.quote(detail_path)}")
     try:
@@ -236,9 +177,17 @@ def get_captions(video_id: str, subject_id: str, detail_path: str,
         return []
 
 
-def _normalize_stream(s: dict) -> dict:
-    """Normalize a stream/download object to a common shape."""
-    # /play uses "resolutions" (string), /download uses "resolution" (int)
+def get_dubs(detail_path, origin="https://netnaija.film"):
+    """Get alternative audio tracks (dubs). Each dub has its own detailPath."""
+    detail = get_subject_detail(detail_path, origin=origin)
+    dubs = detail.get("subject", {}).get("dubs", [])
+    return [{"lanName": d.get("lanName"), "lanCode": d.get("lanCode"),
+             "type": "dub" if d.get("type") == 0 else "sub",
+             "original": d.get("original", False),
+             "detailPath": d.get("detailPath")} for d in dubs]
+
+
+def _normalize_stream(s):
     resolution = s.get("resolution")
     if resolution is None:
         try:
@@ -264,294 +213,44 @@ def _normalize_stream(s: dict) -> dict:
     }
 
 
-# ==================== SEARCH SUGGEST ====================
-
-def search_suggest(keyword: str, per_page: int = 10,
-                   origin: str = "https://netnaija.film") -> list[str]:
-    """
-    POST /wefeed-h5api-bff/subject/search-suggest - autocomplete suggestions.
-
-    Works without a token (unlike /subject/search). Returns the suggestion
-    word strings, e.g. for keyword="oppen" returns
-    ["Oppenheimer", "Oppenheimer: The Real Story", "Alan Oppenheimer", ...].
-    """
-    if not keyword:
-        return []
-    url = f"{API}/wefeed-h5api-bff/subject/search-suggest"
-    body = json.dumps({"keyword": keyword, "perPage": per_page}).encode("utf-8")
-    headers = _build_headers(origin, same_origin=False)
-    headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=15, context=_CTX) as resp:
-            r = json.loads(resp.read())
-    except urllib.error.HTTPError:
-        return []
-    items = r.get("data", {}).get("items", [])
-    out: list[str] = []
-    seen: set[str] = set()
-    for it in items:
-        w = (it.get("word") or "").strip()
-        if w and w.lower() not in seen:
-            seen.add(w.lower())
-            out.append(w)
-    return out
-
-
-# ==================== DETAIL / SEASONS / DUBS ====================
-
-def get_subject_detail(detail_path: str, origin: str = "https://netnaija.film") -> dict[str, Any]:
-    """
-    GET /wefeed-h5api-bff/detail?detailPath=...
-
-    Returns the raw `data` object from upstream, which contains:
-      - subject (title, description, genre, releaseDate, duration, cover,
-        imdbRatingValue, countryName, subtitles, trailer, dubs, ...)
-      - stars (cast/crew list)
-      - resource (seasons list for TV)
-      - metadata, postList, ...
-
-    For cleaner accessors, see get_details_summary(), get_seasons(),
-    get_dubs() below.
-    """
-    url = f"{API}/wefeed-h5api-bff/detail?detailPath={urllib.parse.quote(detail_path)}"
-    r = http_get_json(url, origin=origin)
-    return r.get("data", {})
-
-
-def get_details_summary(detail_path: str, origin: str = "https://netnaija.film") -> dict[str, Any]:
-    """
-    Return a clean summary of a title: synopsis, genre, release date, duration,
-    IMDB rating, country, subtitles, cover, trailer URL, cast list, and dubs.
-    """
-    data = get_subject_detail(detail_path, origin=origin)
-    subj = data.get("subject", {}) or {}
-    stars = data.get("stars", []) or []
-    cast = [
-        {
-            "name": s.get("name", ""),
-            "character": s.get("character", ""),
-            "role": "Director" if s.get("staffType") == 2 else "Cast",
-            "avatarUrl": s.get("avatarUrl", ""),
-        }
-        for s in stars
-    ]
-    trailer_video = (subj.get("trailer") or {}).get("videoAddress", {}) or {}
-    return {
-        "detailPath": detail_path,
-        "subjectId": str(subj.get("subjectId", "")),
-        "subjectType": subj.get("subjectType"),
-        "type": "movie" if subj.get("subjectType") == 1 else "tv",
-        "title": subj.get("title", ""),
-        "description": subj.get("description", "") or (data.get("metadata") or {}).get("description", ""),
-        "genre": subj.get("genre", ""),
-        "releaseDate": subj.get("releaseDate", ""),
-        "duration": subj.get("duration", 0),
-        "imdbRatingValue": subj.get("imdbRatingValue", ""),
-        "imdbRatingCount": subj.get("imdbRatingCount", 0),
-        "countryName": subj.get("countryName", ""),
-        "subtitles": subj.get("subtitles", ""),
-        "cover": (subj.get("cover") or {}).get("url", ""),
-        "hasResource": bool(subj.get("hasResource")),
-        "trailer": {
-            "url": trailer_video.get("url", ""),
-            "videoId": str(trailer_video.get("videoId", "")),
-            "duration": trailer_video.get("duration", 0),
-        },
-        "cast": cast,
-        "castCount": len(cast),
-        "dubs": _normalize_dubs(subj.get("dubs", []) or []),
-        "dubCount": len(_normalize_dubs(subj.get("dubs", []) or [])),
-    }
-
-
-def get_seasons(detail_path: str, origin: str = "https://netnaija.film") -> list[dict]:
-    """
-    Return the list of seasons for a TV show. Each entry:
-      {season, maxEp, allEp, resolutions: [{resolution, epNum}], availableResolutions: [int]}
-    Returns [] for movies or titles with no season info.
-    """
-    data = get_subject_detail(detail_path, origin=origin)
-    raw = (data.get("resource") or {}).get("seasons", []) or []
-    out: list[dict] = []
-    for s in raw:
-        res = s.get("resolutions", []) or []
-        out.append({
-            "season": s.get("se", 0),
-            "maxEp": s.get("maxEp", 0),
-            "allEp": s.get("allEp", ""),
-            "resolutions": [
-                {"resolution": r.get("resolution", 0), "epNum": r.get("epNum", 0)}
-                for r in res
-            ],
-            "availableResolutions": [r.get("resolution", 0) for r in res],
-        })
-    return out
-
-
-def get_dubs(detail_path: str, origin: str = "https://netnaija.film") -> list[dict]:
-    """
-    Return alternative audio / subtitle language tracks for a title.
-
-    Each entry: {subjectId, lanName, lanCode, original, type, kind, detailPath}
-      - type=0, kind="dub"      -> a dubbed audio track
-      - type=1, kind="subtitle" -> a subtitle-language variant
-      - original=True           -> the original-language track
-    """
-    data = get_subject_detail(detail_path, origin=origin)
-    subj = data.get("subject", {}) or {}
-    return _normalize_dubs(subj.get("dubs", []) or [])
-
-
-def _normalize_dubs(dubs: list[dict]) -> list[dict]:
-    return [
-        {
-            "subjectId": str(d.get("subjectId", "")),
-            "lanName": d.get("lanName", ""),
-            "lanCode": d.get("lanCode", ""),
-            "original": bool(d.get("original", False)),
-            "type": d.get("type", 0),
-            "kind": "subtitle" if d.get("type") == 1 else "dub",
-            "detailPath": d.get("detailPath", ""),
-        }
-        for d in dubs
-    ]
-
-
-# ==================== STREAM PROXY ====================
-
-# Default hosted API base (the scraper's --api-base flag overrides this).
-DEFAULT_API_BASE = "https://moviebox-api-eight.vercel.app"
-
-# CDN hosts that the /api/stream proxy is allowed to forward.
-PROXY_ALLOWED_HOSTS = (
-    "bcdnxw.hakunaymatata.com",  # video CDN
-    "cacdn.hakunaymatata.com",   # subtitle CDN
-    "macdn.aoneroom.com",        # trailer CDN
-    "pbcdnw.aoneroom.com",       # image CDN
-)
-
-
-def stream_url_via_proxy(mp4_url: str, api_base: str = DEFAULT_API_BASE) -> str:
-    """
-    Build a proxied media URL that adds the required `Referer: https://netnaija.film/`
-    header for the CDN.
-
-    The CDN (bcdnxw.hakunaymatata.com) returns HTTP 429 for any request that does
-    not carry that Referer, so a browser <video> tag or a plain `curl -O` cannot
-    fetch the bytes directly. Routing through /api/stream fixes that.
-
-    Example:
-        stream_url_via_proxy("https://bcdnxw.hakunaymatata.com/resource/x.mp4?sign=...")
-        -> "https://moviebox-api-eight.vercel.app/api/stream?url=https%3A%2F%2F..."
-    """
-    if not mp4_url:
-        return ""
-    return f"{api_base.rstrip('/')}/api/stream?url={urllib.parse.quote(mp4_url, safe='')}"
-
-
-def download_via_proxy(mp4_url: str, out_path: str,
-                       api_base: str = DEFAULT_API_BASE,
-                       origin: str = "https://netnaija.film") -> str:
-    """
-    Download an MP4 through the /api/stream proxy (which injects the Referer
-    header the CDN requires) and save it to `out_path`.
-
-    Returns the saved path. Raises urllib.error.HTTPError on failure.
-
-    Why a proxy: the CDN rejects requests without `Referer: https://netnaija.film/`
-    with HTTP 429. The /api/stream endpoint on the hosted API adds that header
-    server-side and streams the bytes back.
-    """
-    if not mp4_url:
-        raise ValueError("mp4_url is required")
-    host = urllib.parse.urlparse(mp4_url).hostname or ""
-    if host not in PROXY_ALLOWED_HOSTS:
-        raise ValueError(
-            f"Refused to download from host '{host}'. Allowed: {PROXY_ALLOWED_HOSTS}"
-        )
-    proxied = stream_url_via_proxy(mp4_url, api_base=api_base)
-    headers = {
-        "User-Agent": UA,
-        "Accept": "*/*",
-        "Referer": origin + "/",
-    }
-    req = urllib.request.Request(proxied, headers=headers)
-    with urllib.request.urlopen(req, timeout=120, context=_CTX) as resp:
-        with open(out_path, "wb") as f:
-            while True:
-                chunk = resp.read(64 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-    return out_path
-
-
-# ==================== HELPERS ====================
-
-def extract_all_subjects(home_data: dict[str, Any]) -> list[dict]:
-    """Walk the home response and extract all unique subjects."""
-    seen: set[str] = set()
-    out: list[dict] = []
-
-    def walk(o: Any) -> None:
+def extract_all_subjects(home_data):
+    seen = set()
+    out = []
+    def walk(o):
         if isinstance(o, dict):
             sid = o.get("subjectId")
             title = o.get("title")
             if sid and title and str(sid) not in seen:
                 seen.add(str(sid))
-                out.append({
-                    "subjectId": str(sid),
-                    "title": str(title),
-                    "subjectType": o.get("subjectType"),
-                    "detailPath": o.get("detailPath"),
-                })
+                out.append({"subjectId": str(sid), "title": str(title),
+                            "subjectType": o.get("subjectType"), "detailPath": o.get("detailPath")})
             for v in o.values():
                 walk(v)
         elif isinstance(o, list):
             for v in o:
                 walk(v)
-
     walk(home_data)
     return out
 
 
-def fetch_all_qualities(subject_id: str, detail_path: str, se: int = 0, ep: int = 0,
-                        origin: str = "https://netnaija.film") -> tuple[list[dict], str | None]:
-    """
-    Try /play first (gets 1080P free if fresh). Fall back to /download (1080P vipLocked).
-
-    Returns (qualities, source_endpoint) where source is "play" or "download".
-    """
-    # Try /play first - it returns 1080P free
+def fetch_all_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netnaija.film"):
     qualities = get_play_qualities(subject_id, detail_path, se=se, ep=ep, origin=origin)
     if qualities:
         return qualities, "play"
-
-    # Fallback: /download via site proxy (1080P will be vipLocked but 360/480/720 free)
     qualities = get_download_qualities(subject_id, detail_path, se=se, ep=ep, origin=origin)
     if qualities:
         return qualities, "download"
-
     return [], None
 
 
-def best_free_quality(qualities: list[dict]) -> dict | None:
-    """Return the highest-resolution free (non-VIP) quality, or None."""
+def best_free_quality(qualities):
     free = [q for q in qualities if q["url"] and not q["vipLocked"]]
     if not free:
         return None
     return max(free, key=lambda q: q["resolution"])
 
 
-# ==================== SCRAPERS ====================
-
-def scrape_movie(subject: dict, origin: str = "https://netnaija.film", verbose: bool = True) -> dict | None:
-    """
-    Scrape a single movie (subjectType=1). One /play call with se=0,ep=0 returns all qualities.
-
-    `subject` must have: subjectId, detailPath, title
-    """
+def scrape_movie(subject, origin="https://netnaija.film", verbose=True):
     sid = subject["subjectId"]
     dp = subject["detailPath"]
     title = subject.get("title", "?")
@@ -569,34 +268,15 @@ def scrape_movie(subject: dict, origin: str = "https://netnaija.film", verbose: 
         return None
     best = best_free_quality(qualities)
     if verbose:
-        summary = ", ".join(
-            f'{q["resolution"]}P({"VIP" if q["vipLocked"] else "free"})'
-            for q in qualities
-        )
+        summary = ", ".join(f'{q["resolution"]}P({"VIP" if q["vipLocked"] else "free"})' for q in qualities)
         print(f"       OK [{source}] {len(qualities)} qualities: {summary}")
-        if best:
-            print(f"       best free: {best['resolution']}P {best['size_mb']}MB")
-    return {
-        "title": title,
-        "subjectId": sid,
-        "subjectType": 1,
-        "detailPath": dp,
-        "watch_url": f"{origin}/videoPlayPage/{dp}?type=/movie/detail",
-        "source": source,
-        "qualities": qualities,
-    }
+    return {"title": title, "subjectId": sid, "subjectType": 1, "detailPath": dp,
+            "watch_url": f"{origin}/videoPlayPage/{dp}?type=/movie/detail",
+            "source": source, "qualities": qualities}
 
 
-def scrape_tv(subject: dict, origin: str = "https://netnaija.film",
-              season_filter: set[int] | None = None,
-              max_episodes_per_season: int = 2,
-              delay: float = 3.0,
-              verbose: bool = True) -> dict | None:
-    """
-    Scrape a TV show (subjectType=2). Iterates seasons and episodes.
-
-    `subject` must have: subjectId, detailPath, title
-    """
+def scrape_tv(subject, origin="https://netnaija.film", season_filter=None,
+              max_episodes_per_season=2, delay=3.0, verbose=True):
     sid = subject["subjectId"]
     dp = subject["detailPath"]
     title = subject.get("title", "?")
@@ -608,54 +288,35 @@ def scrape_tv(subject: dict, origin: str = "https://netnaija.film",
         if verbose:
             print(f"       detail ERROR: {e}")
         return None
-
     seasons = detail.get("resource", {}).get("seasons", [])
     if not seasons:
         if verbose:
             print(f"       no seasons info")
         return None
-
-    result: dict[str, Any] = {
-        "title": title,
-        "subjectId": sid,
-        "subjectType": 2,
-        "detailPath": dp,
-        "watch_url": f"{origin}/videoPlayPage/{dp}?type=/movie/detail",
-        "seasons": [],
-    }
-
+    result = {"title": title, "subjectId": sid, "subjectType": 2, "detailPath": dp,
+              "watch_url": f"{origin}/videoPlayPage/{dp}?type=/movie/detail", "seasons": []}
     for season in seasons:
         se = season.get("se", 0)
         max_ep = season.get("maxEp", 0)
         if season_filter and se not in season_filter:
             continue
-        avail_res = [r.get("resolution") for r in season.get("resolutions", [])]
         if verbose:
+            avail_res = [r.get("resolution") for r in season.get("resolutions", [])]
             print(f"       Season {se} ({max_ep} ep, qualities: {avail_res})")
-
-        ep_results: list[dict] = []
+        ep_results = []
         ep_limit = min(max_ep, max_episodes_per_season) if max_episodes_per_season else max_ep
         for ep in range(1, ep_limit + 1):
             try:
                 qualities, source = fetch_all_qualities(sid, dp, se=se, ep=ep, origin=origin)
                 if qualities:
                     best = best_free_quality(qualities)
-                    summary = ", ".join(
-                        f'{q["resolution"]}P({"VIP" if q["vipLocked"] else "free"})'
-                        for q in qualities
-                    )
+                    summary = ", ".join(f'{q["resolution"]}P({"VIP" if q["vipLocked"] else "free"})' for q in qualities)
                     if verbose:
                         if best:
-                            print(f"         S{se}E{ep} [{source}] {summary}  "
-                                  f"best: {best['resolution']}P {best['size_mb']}MB")
+                            print(f"         S{se}E{ep} [{source}] {summary}  best: {best['resolution']}P {best['size_mb']}MB")
                         else:
                             print(f"         S{se}E{ep} [{source}] {summary}  (all VIP)")
-                    ep_results.append({
-                        "season": se,
-                        "episode": ep,
-                        "source": source,
-                        "qualities": qualities,
-                    })
+                    ep_results.append({"season": se, "episode": ep, "source": source, "qualities": qualities})
                 else:
                     if verbose:
                         print(f"         S{se}E{ep}: rate-limited, skipping")
@@ -664,12 +325,7 @@ def scrape_tv(subject: dict, origin: str = "https://netnaija.film",
                 if verbose:
                     print(f"         S{se}E{ep}: ERROR {e}")
         if ep_results:
-            result["seasons"].append({
-                "season": se,
-                "maxEp": max_ep,
-                "episodes": ep_results,
-            })
-
+            result["seasons"].append({"season": se, "maxEp": max_ep, "episodes": ep_results})
     if result["seasons"]:
         total_eps = sum(len(s["episodes"]) for s in result["seasons"])
         if verbose:
@@ -677,168 +333,66 @@ def scrape_tv(subject: dict, origin: str = "https://netnaija.film",
     return result if result["seasons"] else None
 
 
-# ==================== CLI ====================
-
-def main() -> int:
-    p = argparse.ArgumentParser(
-        description="MovieBox / Netnaija / OfficialMovieBox full-quality scraper",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    p.add_argument("--trending", action="store_true", help="scrape from trending list")
-    p.add_argument("--home", action="store_true", help="scrape from home page (~600 subjects)")
-    p.add_argument("--search", help="filter home results by title (case-insensitive)")
-    p.add_argument("--movie", help="scrape single movie by detailPath (e.g. oppenheimer-Akh5Nrwl7o)")
-    p.add_argument("--tv", help="scrape TV show by detailPath (e.g. lucifer-UQASHYbVPB2)")
-    p.add_argument("--seasons", help="comma-separated season numbers for TV (e.g. 1,2,3)")
-    p.add_argument("--limit", type=int, default=10, help="max subjects to scrape (default: 10)")
-    p.add_argument("--max-episodes", type=int, default=2,
-                   help="max episodes per TV season (default: 2, use 0 for all)")
-    p.add_argument("--delay", type=float, default=3.0,
-                   help="delay between calls in seconds (default: 3.0, increase if rate-limited)")
-    p.add_argument("--site", choices=list(SITES.keys()), default="netnaija",
-                   help="which site to impersonate (default: netnaija)")
-    p.add_argument("--out", default=DEFAULT_OUT, help=f"output JSON path (default: {DEFAULT_OUT})")
-    p.add_argument("--quiet", action="store_true", help="suppress progress output")
-    p.add_argument("--info", help="print details + seasons + dubs for a detailPath and exit")
-    p.add_argument("--api-base", default=DEFAULT_API_BASE,
-                   help=f"hosted API base for the /api/stream proxy (default: {DEFAULT_API_BASE})")
+def main():
+    p = argparse.ArgumentParser(description="MovieBox / Netnaija / OfficialMovieBox scraper")
+    p.add_argument("--trending", action="store_true")
+    p.add_argument("--home", action="store_true")
+    p.add_argument("--search", help="filter home results by title")
+    p.add_argument("--movie", help="scrape single movie by detailPath")
+    p.add_argument("--tv", help="scrape TV show by detailPath")
+    p.add_argument("--seasons", help="comma-separated season numbers for TV")
+    p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--max-episodes", type=int, default=2)
+    p.add_argument("--delay", type=float, default=3.0)
+    p.add_argument("--site", choices=list(SITES.keys()), default="netnaija")
+    p.add_argument("--out", default=DEFAULT_OUT)
+    p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
-
-    if args.site not in SITES:
-        print(f"ERROR: unknown site '{args.site}'. Choose from: {list(SITES.keys())}", file=sys.stderr)
-        return 2
     origin = SITES[args.site]
     verbose = not args.quiet
-
     if verbose:
         print(f"[*] Site: {origin}")
-        print(f"[*] Delay between calls: {args.delay}s")
-
-    # --info: print details + seasons + dubs for a single detailPath and exit.
-    if args.info:
-        try:
-            summary = get_details_summary(args.info, origin=origin)
-            seasons = get_seasons(args.info, origin=origin)
-            dubs = get_dubs(args.info, origin=origin)
-        except Exception as e:
-            print(f"ERROR fetching info for {args.info}: {e}", file=sys.stderr)
-            return 1
-        out = {
-            "summary": summary,
-            "seasons": seasons,
-            "dubs": dubs,
-        }
-        print(json.dumps(out, indent=2, ensure_ascii=False))
-        return 0
-
-    results: list[dict] = []
-
+        print(f"[*] Delay: {args.delay}s")
+    results = []
     if args.movie:
-        # Single movie by detailPath
-        try:
-            d = get_subject_detail(args.movie, origin=origin)
-            sid = d.get("subject", {}).get("subjectId", "?")
-            title = d.get("subject", {}).get("title", args.movie)
-        except Exception as e:
-            print(f"ERROR fetching detail for {args.movie}: {e}", file=sys.stderr)
-            return 1
-        r = scrape_movie({"subjectId": sid, "detailPath": args.movie, "title": title},
-                         origin=origin, verbose=verbose)
-        if r:
-            results.append(r)
-
+        d = get_subject_detail(args.movie, origin=origin)
+        sid = d.get("subject", {}).get("subjectId", "?")
+        title = d.get("subject", {}).get("title", args.movie)
+        r = scrape_movie({"subjectId": sid, "detailPath": args.movie, "title": title}, origin=origin, verbose=verbose)
+        if r: results.append(r)
     elif args.tv:
-        # Single TV show by detailPath
-        try:
-            d = get_subject_detail(args.tv, origin=origin)
-            sid = d.get("subject", {}).get("subjectId", "?")
-            title = d.get("subject", {}).get("title", args.tv)
-        except Exception as e:
-            print(f"ERROR fetching detail for {args.tv}: {e}", file=sys.stderr)
-            return 1
+        d = get_subject_detail(args.tv, origin=origin)
+        sid = d.get("subject", {}).get("subjectId", "?")
+        title = d.get("subject", {}).get("title", args.tv)
         sf = set(int(x) for x in args.seasons.split(",")) if args.seasons else None
         max_eps = args.max_episodes if args.max_episodes > 0 else 999
-        r = scrape_tv({"subjectId": sid, "detailPath": args.tv, "title": title},
-                      origin=origin, season_filter=sf,
-                      max_episodes_per_season=max_eps, delay=args.delay, verbose=verbose)
-        if r:
-            results.append(r)
-
+        r = scrape_tv({"subjectId": sid, "detailPath": args.tv, "title": title}, origin=origin,
+                      season_filter=sf, max_episodes_per_season=max_eps, delay=args.delay, verbose=verbose)
+        if r: results.append(r)
     else:
-        # Bulk: trending or home
         if args.home or args.search:
-            if verbose:
-                print("[*] Fetching home page...")
-            try:
-                home = get_home(origin=origin)
-            except Exception as e:
-                print(f"ERROR fetching home: {e}", file=sys.stderr)
-                return 1
+            if verbose: print("[*] Fetching home page...")
+            home = get_home(origin=origin)
             subjects = extract_all_subjects(home)
             if args.search:
                 q = args.search.lower()
                 subjects = [s for s in subjects if q in s["title"].lower()]
             subjects = subjects[:args.limit]
         else:
-            if verbose:
-                print("[*] Fetching trending...")
-            try:
-                subjects = get_trending(per_page=max(args.limit, 20), origin=origin)[:args.limit]
-            except Exception as e:
-                print(f"ERROR fetching trending: {e}", file=sys.stderr)
-                return 1
-        if verbose:
-            print(f"[*] Got {len(subjects)} subjects")
-
+            if verbose: print("[*] Fetching trending...")
+            subjects = get_trending(per_page=max(args.limit, 20), origin=origin)[:args.limit]
+        if verbose: print(f"[*] Got {len(subjects)} subjects")
         for s in subjects:
             if s.get("subjectType") == 2:
-                r = scrape_tv(s, origin=origin,
-                              max_episodes_per_season=args.max_episodes,
-                              delay=args.delay, verbose=verbose)
+                r = scrape_tv(s, origin=origin, max_episodes_per_season=args.max_episodes, delay=args.delay, verbose=verbose)
             else:
                 r = scrape_movie(s, origin=origin, verbose=verbose)
-            if r:
-                results.append(r)
+            if r: results.append(r)
             time.sleep(args.delay)
-
-    # Save
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     if verbose:
         print(f"\n[*] Saved {len(results)} entries -> {args.out}")
-
-    # Summary
-    if verbose:
-        print("\n=== Summary ===")
-        for r in results:
-            if r.get("subjectType") == 2:
-                n_eps = sum(len(s["episodes"]) for s in r.get("seasons", []))
-                # Count free qualities
-                free_1080 = sum(
-                    1 for s in r.get("seasons", [])
-                    for ep in s.get("episodes", [])
-                    for q in ep["qualities"]
-                    if q["resolution"] == 1080 and not q["vipLocked"] and q["url"]
-                )
-                print(f"  [TV]  {r['title']:32s}  "
-                      f"{len(r.get('seasons', []))} seasons, {n_eps} episodes  "
-                      f"(1080P free: {free_1080})")
-                # Show first episode's best quality URL
-                for s in r.get("seasons", [])[:1]:
-                    for ep in s.get("episodes", [])[:1]:
-                        best = best_free_quality(ep["qualities"])
-                        if best:
-                            url_preview = best["url"][:80] + ("..." if len(best["url"]) > 80 else "")
-                            print(f"        S{s['season']}E{ep['episode']} best free: "
-                                  f"{best['resolution']}P {best['size_mb']}MB  {url_preview}")
-            else:
-                best = best_free_quality(r.get("qualities", []))
-                if best:
-                    url_preview = best["url"][:80] + ("..." if len(best["url"]) > 80 else "")
-                    print(f"  [MOV] {r['title']:32s}  best free: "
-                          f"{best['resolution']}P {best['size_mb']}MB  {url_preview}")
-
     return 0
 
 
