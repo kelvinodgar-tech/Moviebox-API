@@ -749,13 +749,44 @@
     // Route the MP4 through /api/stream so the browser can play it (the CDN
     // requires a Referer header and returns 429 without it).
     var playSrc = streamProxyUrl(quality.url);
+    var directUrl = quality.url;
     body.innerHTML = ''
-      + '<div class="player-video"><video src="' + escapeHtml(playSrc) + '" controls autoplay playsinline></video></div>'
+      + '<div class="player-video"><video id="player-video-el" src="' + escapeHtml(playSrc) + '" controls autoplay playsinline></video></div>'
       + '<div class="quality-bar">'
       +   '<span class="quality-label">Quality:</span>'
       +   qButtons
       + '</div>'
-      + '<div class="text-muted mt-4" style="font-size:13px">Now playing: ' + escapeHtml(title) + (season ? ' S' + season + 'E' + episode : '') + ' at ' + quality.resolution + 'P' + (quality.size_mb ? ' (' + quality.size_mb + ' MB)' : '') + '</div>';
+      + '<div class="text-muted mt-4" style="font-size:13px">Now playing: ' + escapeHtml(title) + (season ? ' S' + season + 'E' + episode : '') + ' at ' + quality.resolution + 'P' + (quality.size_mb ? ' (' + quality.size_mb + ' MB)' : '') + '</div>'
+      + '<div id="player-fallback" class="error-box" style="display:none;margin-top:12px"></div>';
+
+    // Detect proxy/CDN rejection (426/429) and show a helpful fallback.
+    var vidEl = $("video", body);
+    if (vidEl) {
+      var fallbackShown = false;
+      function showFallback(msg) {
+        if (fallbackShown) return;
+        fallbackShown = true;
+        var fb = $("#player-fallback", body);
+        if (fb) {
+          fb.style.display = "";
+          fb.innerHTML = '<div style="margin-bottom:8px">' + escapeHtml(msg) + '</div>'
+            + '<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">The video CDN (bcdnxw.hakunaymatata.com) rejects browser and cloud-IP requests without a Referer header. Run the Python scraper locally to download this file, or use curl:</div>'
+            + '<code style="display:block;background:#000;padding:8px;border-radius:4px;font-size:11px;word-break:break-all">curl -H "Referer: https://netnaija.film/" -O "' + escapeHtml(directUrl) + '"</code>';
+        }
+      }
+      vidEl.addEventListener("error", function () {
+        // Check the proxy URL to see if it returned an error status.
+        fetch(playSrc, { method: "HEAD" }).then(function (r) {
+          if (r.status === 426 || r.status === 429 || r.status === 403) {
+            showFallback("This video cannot be played in the browser (CDN returned " + r.status + ").");
+          } else if (!r.ok) {
+            showFallback("Playback failed (HTTP " + r.status + "). Try again in a moment.");
+          }
+        }).catch(function () {
+          showFallback("Playback failed. The CDN may be rate-limiting this IP.");
+        });
+      });
+    }
 
     $all(".quality-btn", body).forEach(function (b) {
       if (b.disabled) return;
@@ -819,11 +850,37 @@
           +     '<div class="download-meta">' + escapeHtml(metaParts) + '</div>'
           +   '</div>'
           +   (q.url && !q.vipLocked
-              ? '<a class="btn btn-primary btn-sm" href="' + escapeHtml(streamProxyUrl(q.url)) + '" target="_blank" rel="noopener" download><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</a>'
+              ? '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+                  '<a class="btn btn-primary btn-sm" href="' + escapeHtml(streamProxyUrl(q.url)) + '" target="_blank" rel="noopener" download><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</a>' +
+                  '<button class="btn btn-ghost btn-sm copy-url-btn" data-url="' + escapeHtml(q.url) + '" title="Copy direct MP4 URL (use with curl + Referer)">Copy URL</button>' +
+                '</div>'
               : '<span class="btn btn-ghost btn-sm" style="cursor:not-allowed;opacity:.5">VIP only</span>')
           + '</div>';
       }).join("") + '</div>'
-      + '<div class="text-muted mt-4" style="font-size:12px">Links expire in ~24 hours. Downloads are routed through the /api/stream proxy so the CDN accepts them. Right-click and "Save link as" if the file opens in the browser instead of downloading.</div>';
+      + '<div class="text-muted mt-4" style="font-size:12px">Links expire in ~24 hours. Downloads route through the /api/stream proxy. If the proxy is blocked (426), use "Copy URL" and download with: <code style="background:#000;padding:2px 6px;border-radius:3px">curl -H "Referer: https://netnaija.film/" -O "&lt;url&gt;"</code></div>';
+
+      // Wire copy-to-clipboard for direct URL buttons.
+      $all(".copy-url-btn", body).forEach(function (b) {
+        b.addEventListener("click", function () {
+          var url = b.getAttribute("data-url") || "";
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(url).then(function () {
+              b.textContent = "Copied!";
+              setTimeout(function () { b.textContent = "Copy URL"; }, 1500);
+            }).catch(function () {
+              b.textContent = "Copy failed";
+              setTimeout(function () { b.textContent = "Copy URL"; }, 1500);
+            });
+          } else {
+            // Fallback for older browsers.
+            var ta = document.createElement("textarea");
+            ta.value = url; document.body.appendChild(ta); ta.select();
+            try { document.execCommand("copy"); b.textContent = "Copied!"; } catch (e) { b.textContent = "Copy failed"; }
+            setTimeout(function () { b.textContent = "Copy URL"; }, 1500);
+            document.body.removeChild(ta);
+          }
+        });
+      });
     }).catch(function (e) {
       body.innerHTML = '<div class="error-box">Failed to load download links: ' + escapeHtml(e.message) + '</div>';
     });
