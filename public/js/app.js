@@ -81,7 +81,7 @@
     var cover = item.cover || "";
     var title = escapeHtml(item.title || "Untitled");
     var rating = item.imdbRatingValue ? parseFloat(item.imdbRatingValue).toFixed(1) : "";
-    var year = (item.releaseDate || "").slice(0, 4);
+    var year = String(item.releaseDate || "").slice(0, 4);
     var genre = escapeHtml((item.genre || "").split(",")[0] || "");
     var type = item.type || (item.subjectType === 1 ? "movie" : "tv");
     var dp = escapeHtml(item.detailPath || "");
@@ -221,7 +221,7 @@
         var img = it.bannerImage || it.cover || "";
         var rating = it.imdbRatingValue ? parseFloat(it.imdbRatingValue).toFixed(1) : "";
         var genre = escapeHtml((it.genre || "").split(",").slice(0, 2).join(", "));
-        var year = (it.releaseDate || "").slice(0, 4);
+        var year = String(it.releaseDate || "").slice(0, 4);
         var meta = [];
         if (rating) meta.push('<span class="rating"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>' + rating + '</span>');
         if (year) meta.push('<span>' + year + '</span>');
@@ -466,7 +466,7 @@
     var type = info.type || (info.subjectType === 1 ? "movie" : "tv");
     var genres = (info.genre || "").split(",").map(function (g) { return g.trim(); }).filter(Boolean);
     var rating = info.imdbRatingValue ? parseFloat(info.imdbRatingValue).toFixed(1) : "N/A";
-    var year = (info.releaseDate || "").slice(0, 4);
+    var year = String(info.releaseDate || "").slice(0, 4);
 
     var dubs = (info.dubs || []).filter(function (d) { return d.kind === "dub"; });
     var subTracks = (info.dubs || []).filter(function (d) { return d.kind === "subtitle"; });
@@ -743,7 +743,7 @@
     // Movie/show info block shown above the video.
     var infoBlock = "";
     if (info) {
-      var year = (info.releaseDate || "").slice(0, 4);
+      var year = String(info.releaseDate || "").slice(0, 4);
       var genre = (info.genre || "").split(",").slice(0, 3).join(", ");
       var rating = info.imdbRatingValue ? parseFloat(info.imdbRatingValue).toFixed(1) : "";
       var metaParts = [];
