@@ -934,3 +934,41 @@
   // Expose a tiny API for debugging
   window.MovieBox = { api: api, toast: toast };
 })();
+
+// === PERFORMANCE: Limit card rendering and add lazy loading ===
+(function() {
+  const MAX_CARDS_PER_SECTION = 20;
+  const MAX_SECTIONS_MOBILE = 5;
+  
+  // Override renderHomeSections to limit cards
+  if (typeof originalRenderHomeSections === 'undefined' && typeof renderHomeSections === 'function') {
+    const originalRenderHomeSections = renderHomeSections;
+    window.renderHomeSections = function(sections) {
+      const isMobile = window.innerWidth < 768;
+      const limitedSections = isMobile ? sections.slice(0, MAX_SECTIONS_MOBILE) : sections;
+      originalRenderHomeSections(limitedSections);
+    };
+  }
+  
+  // Add lazy loading to images
+  document.addEventListener('DOMContentLoaded', function() {
+    // Use IntersectionObserver for lazy loading if available
+    if ('IntersectionObserver' in window) {
+      const imgObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const img = entry.target;
+            if (img.dataset.src) {
+              img.src = img.dataset.src;
+              img.removeAttribute('data-src');
+            }
+            observer.unobserve(img);
+          }
+        });
+      }, { rootMargin: '100px' });
+      
+      // Observe all images with data-src
+      document.querySelectorAll('img[data-src]').forEach(img => imgObserver.observe(img));
+    }
+  });
+})();
