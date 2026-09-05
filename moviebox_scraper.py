@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MovieBox / Netnaija / OfficialMovieBox — Full Quality Scraper
+MovieBox / Netnaija / OfficialMovieBox - Full Quality Scraper
 =============================================================
 
 A single-file, dependency-free (stdlib only) scraper for the MovieBox streaming
@@ -88,7 +88,7 @@ UA = (
 # Default output directory
 DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "moviebox_urls.json")
 
-# SSL context (skip cert verification — some CDN nodes have weird certs)
+# SSL context (skip cert verification - some CDN nodes have weird certs)
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
@@ -128,14 +128,14 @@ def http_get_json(url: str, origin: str, referer: str | None = None) -> dict[str
 # ==================== API ENDPOINTS ====================
 
 def get_trending(per_page: int = 20, page: int = 1, origin: str = "https://netnaija.film") -> list[dict]:
-    """GET /wefeed-h5api-bff/subject/trending — top trending movies/shows."""
+    """GET /wefeed-h5api-bff/subject/trending - top trending movies/shows."""
     url = f"{API}/wefeed-h5api-bff/subject/trending?page={page}&perPage={per_page}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {}).get("subjectList", []) or r.get("data", [])
 
 
 def get_home(origin: str = "https://netnaija.film") -> dict[str, Any]:
-    """GET /wefeed-h5api-bff/home — full home page with ~600 subjects across categories."""
+    """GET /wefeed-h5api-bff/home - full home page with ~600 subjects across categories."""
     host = urllib.parse.urlparse(origin).hostname
     url = f"{API}/wefeed-h5api-bff/home?host={host}"
     r = http_get_json(url, origin=origin)
@@ -143,7 +143,7 @@ def get_home(origin: str = "https://netnaija.film") -> dict[str, Any]:
 
 
 def get_subject_detail(detail_path: str, origin: str = "https://netnaija.film") -> dict[str, Any]:
-    """GET /wefeed-h5api-bff/detail?detailPath=... — full subject info incl. seasons/resolutions."""
+    """GET /wefeed-h5api-bff/detail?detailPath=... - full subject info incl. seasons/resolutions."""
     url = f"{API}/wefeed-h5api-bff/detail?detailPath={urllib.parse.quote(detail_path)}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {})
@@ -195,7 +195,7 @@ def get_download_qualities(subject_id: str, detail_path: str, se: int = 0, ep: i
 
 def get_captions(video_id: str, subject_id: str, detail_path: str,
                  origin: str = "https://netnaija.film") -> list[dict]:
-    """GET /wefeed-h5api-bff/subject/caption — list of subtitle URLs (signed CloudFront URLs)."""
+    """GET /wefeed-h5api-bff/subject/caption - list of subtitle URLs (signed CloudFront URLs)."""
     url = (f"{API}/wefeed-h5api-bff/subject/caption"
            f"?format=MP4&id={video_id}&subjectId={subject_id}&detailPath={urllib.parse.quote(detail_path)}")
     try:
@@ -269,7 +269,7 @@ def fetch_all_qualities(subject_id: str, detail_path: str, se: int = 0, ep: int 
 
     Returns (qualities, source_endpoint) where source is "play" or "download".
     """
-    # Try /play first — it returns 1080P free
+    # Try /play first - it returns 1080P free
     qualities = get_play_qualities(subject_id, detail_path, se=se, ep=ep, origin=origin)
     if qualities:
         return qualities, "play"
