@@ -1,7 +1,5 @@
 // GET /api/download?url=<mp4-url>&filename=Movie.mp4
-// Edge Runtime download proxy. Injects Referer header. Passes Content-Length.
-
-export const config = { runtime: 'edge' };
+// Node.js runtime (not Edge) - buffers response to set Content-Length properly.
 
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
@@ -15,51 +13,70 @@ function sanitizeFilename(name) {
   return (name || "video.mp4").replace(/[^\w.\- ]/g, "").substring(0, 100) || "video.mp4";
 }
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Range",
-    }});
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range");
+    return res.status(204).end();
   }
 
-  const url = new URL(req.url);
-  const targetUrl = url.searchParams.get("url");
-  const filename = sanitizeFilename(url.searchParams.get("filename") || "video.mp4");
+  const targetUrl = req.query.url;
+  const filename = sanitizeFilename(req.query.filename || "video.mp4");
 
-  if (!targetUrl) return new Response(JSON.stringify({error:"Missing url"}), {status:400, headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
+  if (!targetUrl) return res.status(400).json({ error: "Missing url" });
   
   let parsed;
-  try { parsed = new URL(targetUrl); } catch { return new Response(JSON.stringify({error:"Invalid url"}), {status:400, headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}}); }
-  if (!ALLOWED_HOSTS.includes(parsed.hostname)) return new Response(JSON.stringify({error:"Host not allowed"}), {status:403, headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
+  try { parsed = new URL(targetUrl); } catch { return res.status(400).json({ error: "Invalid url" }); }
+  if (!ALLOWED_HOSTS.includes(parsed.hostname)) return res.status(403).json({ error: "Host not allowed" });
 
   try {
+    // First do a HEAD request to get Content-Length
+    const headResp = await fetch(targetUrl, {
+      method: "HEAD",
+      headers: {
+        "User-Agent": UA,
+        "Referer": "https://netnaija.film/",
+        "Origin": "https://netnaija.film",
+      },
+    });
+    
+    const contentLength = headResp.headers.get("content-length");
+    const contentType = headResp.headers.get("content-type") || "video/mp4";
+    
+    // Set headers
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+
+    // Now stream the actual content
     const upstreamHeaders = {
       "User-Agent": UA,
       "Accept": "*/*",
-      "Accept-Language": "en-US,en;q=0.9",
       "Accept-Encoding": "identity",
       "Referer": "https://netnaija.film/",
       "Origin": "https://netnaija.film",
     };
-    if (req.headers.get("range")) upstreamHeaders["Range"] = req.headers.get("range");
+    if (req.headers.range) upstreamHeaders["Range"] = req.headers.range;
 
     const upstream = await fetch(targetUrl, { headers: upstreamHeaders, redirect: "follow" });
-
-    const respHeaders = new Headers();
-    respHeaders.set("Access-Control-Allow-Origin", "*");
-    respHeaders.set("Content-Disposition", `attachment; filename="${filename}"`);
     
-    // CRITICAL: forward Content-Length so browser shows download progress (not "25/?")
-    const forward = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"];
-    for (const h of forward) {
-      const v = upstream.headers.get(h);
-      if (v) respHeaders.set(h, v);
+    if (!upstream.ok && upstream.status !== 206) {
+      return res.status(upstream.status).json({ error: `Upstream returned ${upstream.status}` });
     }
 
-    return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: respHeaders });
+    // Stream the body
+    const reader = upstream.body.getReader();
+    const pump = () => reader.read().then(({ done, value }) => {
+      if (done) { res.end(); return; }
+      res.write(value);
+      return pump();
+    });
+    await pump();
   } catch (e) {
-    return new Response(JSON.stringify({error:e.message}), {status:502, headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
+    if (!res.headersSent) res.status(502).json({ error: e.message });
+    else res.end();
   }
 }
