@@ -730,7 +730,6 @@ just changes the `Origin` and `Referer` headers.
 
 ```
 Moviebox-API/
-|-- moviebox_scraper.py        # Python scraper (single file, stdlib only)
 |-- api/
 |   |-- home.js                # GET /api/home
 |   |-- trending.js            # GET /api/trending?limit=20
@@ -744,6 +743,7 @@ Moviebox-API/
 |   |-- index.html             # Homepage (hero, trending, sections)
 |   |-- detail.html            # Movie/TV detail page
 |   |-- search.html            # Search results page
+|   |-- moviebox_scraper.py   # Python scraper (also served at /moviebox_scraper.py)
 |   |-- css/
 |   |   `-- style.css          # Dark theme stylesheet
 |   `-- js/
