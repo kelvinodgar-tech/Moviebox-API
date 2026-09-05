@@ -121,6 +121,47 @@ async function fetchTrending(perPage) {
   }
 }
 
+// Fetch /subject/filter (browse). The `keyword` field is IGNORED upstream
+// (totalCount comes back as 1000000 and items are unrelated to the keyword),
+// so this is only useful as an extra browse pool to expand the searchable
+// catalog beyond home + trending. perPage is capped at ~50 by the backend.
+// We fetch `pages` pages in parallel and merge the results.
+async function fetchFilterPages(pages, perPage) {
+  const results = [];
+  const promises = [];
+  for (let p = 1; p <= pages; p++) {
+    promises.push(
+      (async () => {
+        try {
+          const resp = await fetchWithTimeout(
+            `${API}/wefeed-h5api-bff/subject/filter`,
+            {
+              method: "POST",
+              headers: {
+                ...commonHeaders("https://netnaija.film/"),
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ page: p, perPage: perPage || 50 }),
+            },
+            10000
+          );
+          if (!resp.ok) return [];
+          const data = await resp.json();
+          const items = data?.data?.items || [];
+          return items.map(normalizeSubject).filter(Boolean);
+        } catch {
+          return [];
+        }
+      })()
+    );
+  }
+  const settled = await Promise.all(promises);
+  for (const arr of settled) {
+    for (const s of arr) results.push(s);
+  }
+  return results;
+}
+
 // Fetch /subject/search-suggest for autocomplete. Returns string[] of words.
 async function fetchSuggestions(keyword, perPage) {
   if (!keyword) return [];
@@ -180,17 +221,21 @@ export default async function handler(req, res) {
     // Fire all three upstream calls in parallel. Each one degrades gracefully
     // (returns null/[] on failure) so a single upstream hiccup does not break
     // the whole search.
-    const [homeData, trending, suggestions] = await Promise.all([
+    const [homeData, trending, filterItems, suggestions] = await Promise.all([
       fetchHome(),
       fetchTrending(100),
+      fetchFilterPages(2, 50),
       fetchSuggestions(rawQuery, 10),
     ]);
 
-    // Merge home + trending, de-duplicate by subjectId.
+    // Merge home + trending + filter, de-duplicate by subjectId.
     const merged = new Map();
     const homeSubjects = homeData ? extractHomeSubjects(homeData) : [];
     for (const s of homeSubjects) merged.set(s.subjectId, s);
     for (const s of trending) {
+      if (!merged.has(s.subjectId)) merged.set(s.subjectId, s);
+    }
+    for (const s of filterItems) {
       if (!merged.has(s.subjectId)) merged.set(s.subjectId, s);
     }
 
@@ -220,6 +265,7 @@ export default async function handler(req, res) {
       sources: {
         home: homeSubjects.length,
         trending: trending.length,
+        filter: filterItems.length,
       },
       suggestions,
       results,

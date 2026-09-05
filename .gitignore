@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 moviebox_urls.json
 .DS_Store
+.vercel/
