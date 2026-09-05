@@ -11,8 +11,10 @@ download website backed by the MovieBox streaming backend
 All three sites share the same backend. The scraper and API fetch direct MP4
 URLs for movies and TV shows in all available qualities (360P, 480P, 720P,
 1080P). The website is a full streaming app: hero banners, trending list,
-search, detail pages with cast, season/episode selectors, an HTML5 video
-player with quality switching, and direct download links.
+search with relevance ranking, detail pages with cast, season/episode
+selectors with pagination, an HTML5 video player with custom in-player
+controls (quality, subtitles, audio language), inline trailer playback, and
+direct download links.
 
 ## Hosted
 
@@ -31,27 +33,48 @@ and JavaScript (no framework, no build step). Pages:
 | Page | URL | Description |
 |------|-----|-------------|
 | Home | `/` | Hero banner carousel, trending list, all home sections |
-| Search | `/search.html?q=lucifer` | Grid of search results with covers, ratings, type |
-| Detail | `/detail.html?path=lucifer-UQASHYbVPB2` | Cover, synopsis, cast grid, watch/download, seasons for TV |
+| Search | `/search.html?q=lucifer` | Grid of search results ranked by relevance, with covers, ratings, type |
+| Detail | `/detail.html?path=lucifer-UQASHYbVPB2` | Inline player with custom controls, synopsis, cast, seasons for TV, inline trailer |
 
 ### Features
 
 - Dark theme (background `#0f0f0f`, MovieBox green `#10b84d` accent).
 - Fully responsive grid (2 columns on mobile, up to 6 on wide screens).
 - Sticky header with search box on every page.
-- Hero banner carousel that auto-advances every 6 seconds.
+- Hero banner carousel that auto-advances every 6 seconds. The hero is capped
+  at 50vh on mobile so it doesn't dominate the screen, and the carousel dots
+  are centered and tappable.
 - Movie/TV cards with cover, rating badge, type badge, hover play overlay.
-- Detail page with backdrop blur, poster, genre tags, IMDB rating, facts.
-- Cast and crew grid with photos and character names.
-- For TV: season selector buttons and a full episode list, each with Watch
-  and Download buttons.
-- HTML5 `<video>` player in a modal with a quality selector (360P/480P/720P/
-  1080P) and resume-position preservation when switching quality.
-- Download modal listing every available quality with file size and codec,
-  linking directly to the MP4 URL (opens in a new tab).
-- Trailer modal that plays the trailer MP4 inline.
-- Skeleton loaders and error boxes.
-- Toast notifications for transient feedback.
+- Detail page with an inline video player at the top, followed by the title,
+  genres, IMDB rating, synopsis, language reference, facts, and cast. For TV
+  shows, an episode list appears below with pagination for long seasons.
+- Custom HTML5 video player with controls rendered INSIDE the player:
+  - Play/pause, seek bar, current time / duration, volume, fullscreen.
+  - A gear icon (settings) that opens a menu with the Quality selector
+    (360P/480P/720P/1080P, no file sizes shown) and the Audio language
+    selector (dubs). Switching audio re-fetches the stream URL for the new
+    dub's detailPath and switches the source.
+  - A CC button that opens a Subtitles menu listing every available subtitle
+    language returned by `/api/captions`. Selecting a language fetches the
+    `.srt` file through the `/api/stream` proxy, parses it, and renders the
+    cue text as an overlay on the video. "Off" turns subtitles off.
+  - Controls auto-hide during playback and reappear on mouse move or tap.
+- Inline trailer section on the detail page. The trailer is lazy-loaded only
+  when the section scrolls into view, and it plays inline (no modal).
+- Episode pagination for TV shows: seasons with more than 24 episodes are
+  paginated in groups of 24 with a dropdown ("Episodes 1-24", "Episodes
+  25-48", ...). Seasons with more than 20 episodes also show a "Jump to
+  episode" search box that takes the user directly to the episode they type.
+- Download modal listing every available quality as a simple "Download"
+  button. The download goes through `/api/download?url=...&filename=...`,
+  which sets `Content-Disposition: attachment` so the file saves with a
+  clean filename:
+  - Movies: `{Title}_{Resolution}P.mp4` (e.g. `Oppenheimer_1080P.mp4`)
+  - Episodes: `{Title}_S01E013_{Resolution}P.mp4` (e.g.
+    `Lucifer_S01E013_1080P.mp4`); the episode number is 3 digits so the
+    files sort correctly.
+- Skeleton loaders, error boxes, and toast notifications for transient
+  feedback.
 
 ## API
 
@@ -61,19 +84,21 @@ and JavaScript (no framework, no build step). Pages:
 |--------|------|-------------|
 | GET | `/api/home` | Full home page: banners, sections, all subjects |
 | GET | `/api/trending?limit=20` | Trending movies and shows (rich fields) |
-| GET | `/api/search?q=lucifer&limit=20&page=1` | Search by title (home + trending, de-duplicated, with autocomplete suggestions) |
-| GET | `/api/details/:detailPath` | Full details, cast, dubs and trailer |
+| GET | `/api/search?q=bridgeton&limit=20` | Search by title, scraped from the actual site search pages, ranked by relevance |
+| GET | `/api/details/:detailPath` | Full details, cast, dubs, trailer |
 | GET | `/api/seasons/:detailPath` | Seasons with episode counts and resolutions |
 | GET | `/api/movie/:detailPath` | Movie stream/download URLs |
 | GET | `/api/tv/:detailPath?season=1&episode=1` | TV episode stream/download URLs |
-| GET | `/api/captions/:detailPath?season=1&episode=1` | Subtitle URLs |
+| GET | `/api/captions/:detailPath?season=1&episode=1` | Subtitle URLs (one per language) |
 | GET | `/api/stream?url=<encoded-media-url>` | Media proxy: forwards a CDN URL with the required `Referer` header so the browser can play/download MP4s |
+| GET | `/api/download?url=<encoded-media-url>&filename=<name>` | Same as `/api/stream` but also sets `Content-Disposition: attachment; filename="..."` |
 | GET | `/moviebox_scraper.py` | Download the Python scraper |
 
 All endpoints:
 
 - Accept `GET` (and `OPTIONS` for CORS preflight).
-- Return JSON.
+- Return JSON (except `/api/stream` and `/api/download` which proxy the
+  raw media bytes).
 - Send `Access-Control-Allow-Origin: *` so they can be called from any
   browser.
 - Use a 15-second timeout when calling the upstream backend.
@@ -159,55 +184,57 @@ Response:
 
 ---
 
-### GET /api/search?q=...&limit=20&page=1
+### GET /api/search?q=...&limit=20
 
-Searches movies and TV shows by title. The backend's own `/subject/search`
-endpoint requires a non-anonymous token and rejects anonymous callers, so
-this endpoint combines two anonymous-friendly sources and de-duplicates them:
+Searches movies and TV shows by title. This endpoint scrapes the actual
+search-result pages on the three sites that share the MovieBox backend:
 
-1. `/subject/search-suggest` (autocomplete suggestions, returned in the
-   `suggestions` field)
-2. `/home` (~376 subjects on the home page)
-3. `/subject/trending?perPage=100` (up to 100 trending titles)
+- `https://netnaija.film/search-result?keyword=...`
+- `https://officialmoviebox.com/newWeb/searchResult?keyword=...`
+- `https://movieboxonline.net/search-result?keyword=...`
 
-Titles from sources 2 and 3 are merged by `subjectId`, filtered by the query
-(case-insensitive substring on the title), sorted by IMDB rating, and returned
-with rich fields (cover, rating, genre, country, description, releaseDate,
-etc). Supports `page` + `limit` for pagination.
+Each site renders its results inside a Nuxt `__NUXT_DATA__` JSON blob. The
+handler parses that blob, follows the typed-array references to reconstruct
+the full subject objects (title, cover, rating, genre, country, etc), and
+de-duplicates them by `subjectId`. Results from all three sites are merged.
+
+The merged results are then ranked by relevance to the query:
+
+1. Exact title match (case-insensitive)
+2. Title starts with the query (case-insensitive)
+3. Title contains the query as a substring
+4. Partial/fuzzy: every whitespace-separated query token appears somewhere
+   in the title
+5. Other matches
+
+Within the same tier, results are secondarily sorted by IMDB rating so the
+better title wins ties. For example, searching `Bridgerton` puts
+`Bridgerton S1-S4` (starts-with match) ahead of
+`Queen Charlotte: A Bridgerton Story` (contains match).
 
 ```bash
-curl "https://moviebox-api-eight.vercel.app/api/search?q=oppenheimer&limit=10"
+curl "https://moviebox-api-eight.vercel.app/api/search?q=bridgeton&limit=10"
 ```
 
 Response:
 
 ```json
 {
-  "query": "oppenheimer",
-  "page": 1,
-  "limit": 10,
-  "total": 1,
-  "count": 1,
-  "hasMore": false,
-  "sources": { "home": 376, "trending": 100 },
-  "suggestions": ["Oppenheimer", "Oppenheimer: The Real Story", "Alan Oppenheimer"],
+  "query": "bridgeton",
+  "count": 5,
+  "total": 5,
   "results": [
     {
-      "title": "Oppenheimer",
-      "subjectId": "326494254824573768",
-      "subjectType": 1,
-      "type": "movie",
-      "detailPath": "oppenheimer-Akh5Nrwl7o",
+      "title": "Bridgerton S1-S4",
+      "subjectId": "...",
+      "subjectType": 2,
+      "type": "tv",
+      "detailPath": "bridgerton-...",
       "description": "...",
-      "releaseDate": "2023-07-19",
-      "duration": 10800,
-      "genre": "Drama,History",
+      "releaseDate": "...",
+      "genre": "...",
       "cover": "https://pbcdnw.aoneroom.com/image/...",
-      "countryName": "United States",
-      "imdbRatingValue": "8.3",
-      "imdbRatingCount": 780000,
-      "subtitles": "English,...",
-      "hasResource": true
+      "imdbRatingValue": "..."
     }
   ]
 }
@@ -218,8 +245,8 @@ Response:
 ### GET /api/details/:detailPath
 
 Returns full movie/show details including synopsis, genre, release date,
-duration, IMDB rating, country, subtitles, cover, trailer, and the full
-cast/stars list.
+duration, IMDB rating, country, subtitles, cover, trailer, the full cast/stars
+list, and the `dubs` array (alternative audio + subtitle language tracks).
 
 ```bash
 curl https://moviebox-api-eight.vercel.app/api/details/oppenheimer-Akh5Nrwl7o
@@ -266,11 +293,39 @@ Response:
       "detailPath": "cillian-murphy-..."
     }
   ],
-  "castCount": 24
+  "castCount": 24,
+  "dubs": [
+    {
+      "subjectId": "2955180061147678728",
+      "lanName": "Arabic sub",
+      "lanCode": "ar",
+      "original": false,
+      "type": 1,
+      "kind": "subtitle",
+      "detailPath": "lucifer-uDYzEbSKiw3"
+    },
+    {
+      "subjectId": "...",
+      "lanName": "English",
+      "lanCode": "en",
+      "original": true,
+      "type": 0,
+      "kind": "dub",
+      "detailPath": "..."
+    }
+  ],
+  "dubCount": 2
 }
 ```
 
 `staffType` meaning: `1` = cast (actor), `2` = director, others = staff.
+
+Each entry in `dubs` is one of:
+
+- `type=0, kind="dub"` - a dubbed audio track. Switching to it inside the
+  player re-fetches the stream URLs for `detailPath` and swaps the source.
+- `type=1, kind="subtitle"` - a subtitle-language variant of the same title.
+- `original=true` - the original-language track.
 
 ---
 
@@ -395,7 +450,8 @@ Response:
 Returns subtitle URLs for a movie or episode. For movies, omit `season` and
 `episode` (or pass `0`). The endpoint first resolves a playable video id from
 `/subject/play` (with `/subject/download` as a fallback), then calls
-`/subject/caption` to get the subtitle list.
+`/subject/caption` to get the subtitle list. Each caption has a `url`
+pointing at a `.srt` file on `cacdn.hakunaymatata.com`.
 
 ```bash
 # Movie
@@ -430,62 +486,61 @@ Response:
 }
 ```
 
-If the play endpoint is rate-limited and no video id can be resolved, the
-endpoint returns a 404 with a message telling the caller to retry in 2-3
-minutes.
+The website's player fetches each `.srt` URL through `/api/stream?url=...`
+(the CDN requires the `Referer` header that the proxy adds), parses the SRT
+blocks into `{ start, end, text }` cues, and renders the active cue as an
+overlay on the video at the bottom center. Selecting a different language in
+the CC menu swaps the cues; "Off" clears them.
 
 ---
 
 ### GET /api/stream?url=<encoded-media-url>
 
-Media proxy. The video CDN (`bcdnxw.hakunaymatata.com`) requires a
-`Referer: https://netnaija.film/` header on every request and returns HTTP 429
-without it. A browser `<video>` tag or a plain `curl -O` cannot set that
-header for a cross-origin resource, so the in-page player and the download
-buttons route MP4 URLs through this proxy. It streams the response body (it
-does not buffer the whole file) and forwards `Range` requests so the browser
-can seek.
+Edge-runtime media proxy. The video CDN
+(`bcdnxw.hakunaymatata.com`) requires a `Referer: https://netnaija.film/`
+header on every request and rejects browser and cloud-IP requests without
+it. A browser `<video>` tag cannot set that header for a cross-origin
+resource, so the in-page player and the download buttons route MP4 and SRT
+URLs through this proxy. It streams the response body (it does not buffer the
+whole file) and forwards `Range` requests so the browser can seek.
 
 Only the known media CDN hosts are allowed (`bcdnxw.hakunaymatata.com`,
-`cacdn.hakunaymatata.com`, `macdn.aoneroom.com`, `pbcdnw.aoneroom.com`).
+`cacdn.hakunaymatata.com`, `macdn.aoneroom.com`, `pbcdnw.aoneroom.com`,
+`pbcdn.aoneroom.com`, `pacdn.aoneroom.com`).
 
 ```bash
-# Play an MP4 in a browser
-open "https://moviebox-api-eight.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
-
-# Download via curl
-curl -O "https://moviebox-api-eight.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
+# Stream an MP4 through the proxy
+curl "https://moviebox-api-eight.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
 ```
 
-The `/api/details` response now also includes a `dubs` array (alternative
-audio + subtitle language tracks). Each entry:
+---
 
-```json
-{
-  "subjectId": "2955180061147678728",
-  "lanName": "Arabic sub",
-  "lanCode": "ar",
-  "original": false,
-  "type": 1,
-  "kind": "subtitle",
-  "detailPath": "lucifer-uDYzEbSKiw3"
-}
+### GET /api/download?url=<encoded-media-url>&filename=<name>
+
+Same as `/api/stream` (Edge-runtime proxy, same allowed hosts, same Referer
+header) but additionally sets
+`Content-Disposition: attachment; filename="<name>"` so the browser saves the
+file with a clean name instead of a random signed-URL filename. The website
+uses this for its Download buttons so movies save as
+`Oppenheimer_1080P.mp4` and episodes save as `Lucifer_S01E013_1080P.mp4`.
+
+The `filename` parameter is sanitised server-side (only alphanumerics, dot,
+hyphen, underscore and space are kept; capped at 100 characters).
+
+```bash
+curl "https://moviebox-api-eight.vercel.app/api/download?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
 ```
-
-- `type=0, kind="dub"` -> a dubbed audio track
-- `type=1, kind="subtitle"` -> a subtitle-language variant
-- `original=true` -> the original-language track
 
 ---
 
 ### Full workflow example
 
 ```bash
-# 1. Search for a movie
+# 1. Search for a movie (results are ranked by relevance)
 curl "https://moviebox-api-eight.vercel.app/api/search?q=oppenheimer&limit=1"
 # -> detailPath: "oppenheimer-Akh5Nrwl7o"
 
-# 2. Get full details (synopsis, cast, trailer)
+# 2. Get full details (synopsis, cast, dubs, trailer)
 curl "https://moviebox-api-eight.vercel.app/api/details/oppenheimer-Akh5Nrwl7o"
 
 # 3. Get all quality URLs
@@ -495,8 +550,8 @@ curl "https://moviebox-api-eight.vercel.app/api/movie/oppenheimer-Akh5Nrwl7o"
 # 4. Get subtitles
 curl "https://moviebox-api-eight.vercel.app/api/captions/oppenheimer-Akh5Nrwl7o"
 
-# 5. Download the MP4
-curl -O "https://bcdnxw.hakunaymatata.com/resource/...mp4?sign=..."
+# 5. Download the MP4 with a clean filename
+curl "https://moviebox-api-eight.vercel.app/api/download?url=<encoded-url>&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
 ```
 
 For TV shows:
@@ -516,8 +571,8 @@ curl "https://moviebox-api-eight.vercel.app/api/tv/lucifer-UQASHYbVPB2?season=1&
 # 4. Get episode subtitles
 curl "https://moviebox-api-eight.vercel.app/api/captions/lucifer-UQASHYbVPB2?season=1&episode=1"
 
-# 5. Download
-curl -O "https://bcdnxw.hakunaymatata.com/resource/...mp4?sign=..."
+# 5. Download the episode
+curl "https://moviebox-api-eight.vercel.app/api/download?url=<encoded-url>&filename=Lucifer_S01E001_1080P.mp4" -o Lucifer_S01E001_1080P.mp4
 ```
 
 ## Python Scraper (Local)
@@ -543,7 +598,7 @@ The MovieBox backend exposes two endpoints that return video URLs:
 **1. `/wefeed-h5api-bff/subject/play`** (direct on `h5-api.aoneroom.com`)
 
 Returns all qualities (360P/480P/720P/1080P) including 1080P as free. This is
-what the "Watch Free" button calls inline.
+what the website player calls.
 
 - Rate-limited: 1 successful call per ~2-3 minutes per IP address.
 - Best for: single movie/episode fetches where you want 1080P.
@@ -690,39 +745,16 @@ The `detailPath` is a URL-safe slug used by the sites. You can find it by:
 - The hosted API shares a single IP (Vercel), so it is also rate-limited. For
   heavy use, run the scraper locally.
 
-### URL Expiry
-
-The signed MP4 URLs (e.g.
-`https://bcdnxw.hakunaymatata.com/resource/...mp4?sign=...&t=...`) expire after
-approximately 24 hours. Re-run the scraper or call the API again to get fresh
-URLs.
-
 ### Quality Availability
 
 Not all titles have all qualities. The `available_seasons` field in the TV
 response (and the `availableResolutions` field in the `/api/seasons` response)
-shows what is available per season. For example:
-
-- Oppenheimer (movie): only 480P
-- Lucifer S1: 360P, 480P, 720P, 1080P
-- All American S1: 360P, 480P, 1080P (no 720P)
-
-### 1080P VIP-Lock Discrepancy
-
-The two endpoints disagree on 1080P:
-
-- `/play` returns 1080P as free (URL included)
-- `/download` marks 1080P as `vipLocked: true` (empty URL)
-
-The scraper, the `/api/movie`, `/api/tv` and `/api/captions` endpoints all try
-`/play` first for 1080P. If that is rate-limited, they fall back to `/download`
-(1080P will be VIP-locked).
+shows what is available per season.
 
 ### CDN Hosts
 
 Video files are served from `bcdnxw.hakunaymatata.com`. Subtitles from
-`cacdn.hakunaymatata.com`. Both use signed CloudFront/Aliyun OSS URLs with
-~24h TTL.
+`cacdn.hakunaymatata.com`. Both use signed CloudFront/Aliyun OSS URLs.
 
 ## What NOT to Do
 
@@ -731,9 +763,9 @@ Video files are served from `bcdnxw.hakunaymatata.com`. Subtitles from
 - Do not call `/subject/download` directly on `h5-api.aoneroom.com`. It only
   works via the site proxy. The scraper handles this automatically.
 - Do not expect 1080P from `/subject/download`. Use `/subject/play` for 1080P
-  (the scraper does this first).
-- Do not store the signed URLs long-term. They expire in ~24 hours. Store the
-  `detailPath` and re-fetch URLs when needed.
+  (the scraper and API do this first).
+- Do not store the signed URLs long-term. Store the `detailPath` and re-fetch
+  URLs when needed.
 - Do not ignore the `--delay` flag. For bulk scraping, set it to 5+ seconds.
 - Do not assume all titles have all qualities. Check the `qualities` array in
   the output.
@@ -792,21 +824,23 @@ Moviebox-API/
 |-- api/
 |   |-- home.js                # GET /api/home
 |   |-- trending.js            # GET /api/trending?limit=20
-|   |-- search.js              # GET /api/search?q=...&limit=10
-|   |-- details.js             # GET /api/details/:detailPath
+|   |-- search.js              # GET /api/search?q=...&limit=10 (ranked by relevance)
+|   |-- details.js             # GET /api/details/:detailPath (incl. dubs)
 |   |-- seasons.js             # GET /api/seasons/:detailPath
 |   |-- movie.js               # GET /api/movie/:detailPath
 |   |-- tv.js                  # GET /api/tv/:detailPath?season=1&episode=1
-|   `-- captions.js            # GET /api/captions/:detailPath?season=1&episode=1
+|   |-- captions.js            # GET /api/captions/:detailPath?season=1&episode=1
+|   |-- stream.js              # GET /api/stream?url=... (Edge, media proxy)
+|   `-- download.js            # GET /api/download?url=...&filename=... (Edge)
 |-- public/
 |   |-- index.html             # Homepage (hero, trending, sections)
-|   |-- detail.html            # Movie/TV detail page
+|   |-- detail.html            # Movie/TV detail page (inline player, trailer)
 |   |-- search.html            # Search results page
-|   |-- moviebox_scraper.py   # Python scraper (also served at /moviebox_scraper.py)
+|   |-- moviebox_scraper.py    # Python scraper (also served at /moviebox_scraper.py)
 |   |-- css/
 |   |   `-- style.css          # Dark theme stylesheet
 |   `-- js/
-|       `-- app.js             # All frontend logic
+|       `-- app.js             # All frontend logic (custom player, SRT parser)
 |-- vercel.json                # Vercel config (rewrites + headers)
 |-- README.md                  # This file
 `-- .gitignore
