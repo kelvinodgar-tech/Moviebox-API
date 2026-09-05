@@ -1,11 +1,11 @@
 // GET /api/search?q=oppenheimer&limit=20
-// Searches using multiple sources: search-suggest (autocomplete), home page, and trending.
+// Searches across multiple data sources: search-suggest, trending (5 pages), and home page.
 // Returns combined, deduplicated results with full metadata.
 
 const API = "https://h5-api.aoneroom.com";
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
-function headers() {
+function hdr() {
   return {
     "User-Agent": UA,
     "Accept": "application/json",
@@ -15,7 +15,7 @@ function headers() {
   };
 }
 
-function normalizeSubject(s) {
+function norm(s) {
   if (!s || !s.title) return null;
   return {
     title: s.title,
@@ -30,8 +30,7 @@ function normalizeSubject(s) {
     description: s.description || "",
     releaseDate: s.releaseDate || "",
     duration: s.duration || 0,
-    cover: s.cover?.url || s.cover || "",
-    subtitles: s.subtitles || "",
+    cover: s.cover?.url || "",
     hasResource: s.hasResource || false,
   };
 }
@@ -47,71 +46,75 @@ export default async function handler(req, res) {
   const seen = new Set();
   const results = [];
   const suggestions = [];
+  const errors = [];
 
+  // 1. Search suggestions (autocomplete)
   try {
-    // 1. Get search suggestions (autocomplete) from the backend
-    const suggestResp = await fetch(`${API}/wefeed-h5api-bff/subject/search-suggest`, {
+    const r = await fetch(`${API}/wefeed-h5api-bff/subject/search-suggest`, {
       method: "POST",
-      headers: { ...headers(), "Content-Type": "application/json" },
-      body: JSON.stringify({ keyword: q, perPage: limit }),
+      headers: { ...hdr(), "Content-Type": "application/json" },
+      body: JSON.stringify({ keyword: q, perPage: 10 }),
       signal: AbortSignal.timeout(8000),
     });
-    if (suggestResp.ok) {
-      const suggestData = await suggestResp.json();
-      for (const item of (suggestData.data?.items || [])) {
+    if (r.ok) {
+      const d = await r.json();
+      for (const item of (d.data?.items || [])) {
         if (item.word) suggestions.push(item.word);
-        if (item.subject && item.subject.title) {
-          const norm = normalizeSubject(item.subject);
-          if (norm && !seen.has(norm.subjectId)) {
-            seen.add(norm.subjectId);
-            if (norm.title.toLowerCase().includes(q) || q.includes(norm.title.toLowerCase().slice(0, 4))) {
-              results.push(norm);
-            }
+        if (item.subject) {
+          const n = norm(item.subject);
+          if (n && !seen.has(n.subjectId)) {
+            seen.add(n.subjectId);
+            results.push(n);
           }
         }
       }
     }
-  } catch {}
+  } catch (e) { errors.push("suggest: " + e.message); }
 
+  // 2. Search trending (5 pages x 100 = 500 items)
   try {
-    // 2. Get trending (up to 99 items)
-    const trendingResp = await fetch(`${API}/wefeed-h5api-bff/subject/trending?page=1&perPage=100`, {
-      headers: headers(),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (trendingResp.ok) {
-      const trendingData = await trendingResp.json();
-      const items = trendingData.data?.subjectList || trendingData.data || [];
+    const pages = await Promise.all([1, 2, 3, 4, 5].map(async (page) => {
+      try {
+        const r = await fetch(`${API}/wefeed-h5api-bff/subject/trending?page=${page}&perPage=100`, {
+          headers: hdr(),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) return [];
+        const d = await r.json();
+        return d.data?.subjectList || d.data || [];
+      } catch { return []; }
+    }));
+    for (const items of pages) {
       for (const m of items) {
-        const norm = normalizeSubject(m);
-        if (norm && !seen.has(norm.subjectId)) {
-          seen.add(norm.subjectId);
-          if (norm.title.toLowerCase().includes(q)) {
-            results.push(norm);
+        const n = norm(m);
+        if (n && !seen.has(n.subjectId)) {
+          seen.add(n.subjectId);
+          if (n.title.toLowerCase().includes(q)) {
+            results.push(n);
           }
         }
       }
     }
-  } catch {}
+  } catch (e) { errors.push("trending: " + e.message); }
 
+  // 3. Search home page (~600 subjects)
   try {
-    // 3. Get home page content (up to ~376 subjects)
-    const homeResp = await fetch(`${API}/wefeed-h5api-bff/home?host=netnaija.film`, {
-      headers: headers(),
+    const r = await fetch(`${API}/wefeed-h5api-bff/home?host=netnaija.film`, {
+      headers: hdr(),
       signal: AbortSignal.timeout(12000),
     });
-    if (homeResp.ok) {
-      const text = await homeResp.text();
+    if (r.ok) {
+      const text = await r.text();
       try {
         const homeData = JSON.parse(text);
         function walk(o) {
           if (!o || typeof o !== "object") return;
           if (Array.isArray(o)) { o.forEach(walk); return; }
           if (o.subjectId && o.title && !seen.has(String(o.subjectId))) {
-            const norm = normalizeSubject(o);
-            if (norm && norm.title.toLowerCase().includes(q)) {
-              seen.add(norm.subjectId);
-              results.push(norm);
+            const n = norm(o);
+            if (n && n.title.toLowerCase().includes(q)) {
+              seen.add(n.subjectId);
+              results.push(n);
             }
           }
           Object.values(o).forEach(walk);
@@ -119,14 +122,13 @@ export default async function handler(req, res) {
         walk(homeData.data);
       } catch {}
     }
-  } catch {}
+  } catch (e) { errors.push("home: " + e.message); }
 
-  // Sort by rating (highest first), then by title
+  // Sort by rating
   results.sort((a, b) => {
     const ra = parseFloat(a.imdbRating) || 0;
     const rb = parseFloat(b.imdbRating) || 0;
-    if (rb !== ra) return rb - ra;
-    return a.title.localeCompare(b.title);
+    return rb - ra;
   });
 
   res.status(200).json({
