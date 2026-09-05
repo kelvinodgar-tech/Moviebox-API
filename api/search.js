@@ -146,10 +146,31 @@ export default async function handler(req, res) {
     }
   }
 
+  // Rank by relevance:
+  //   1. Exact title match (case-insensitive)
+  //   2. Starts-with match
+  //   3. Contains match (query as substring of title)
+  //   4. Partial / fuzzy match (every query token appears in title, in any order)
+  // Within the same tier, keep IMDB rating as a secondary sort so the better
+  // title wins ties.
+  const qLower = q.toLowerCase();
+  const qTokens = qLower.split(/\s+/).filter(Boolean);
+
+  function rank(s) {
+    const t = String(s.title || "").toLowerCase();
+    if (t === qLower) return 0;                       // exact
+    if (t.startsWith(qLower)) return 1;               // starts with
+    if (t.includes(qLower)) return 2;                 // contains
+    if (qTokens.length > 1 && qTokens.every(tok => t.includes(tok))) return 3; // partial
+    return 4;                                         // fuzzy / other
+  }
   results.sort((a, b) => {
-    const ra = parseFloat(a.imdbRating) || 0;
-    const rb = parseFloat(b.imdbRating) || 0;
-    return rb - ra;
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    const ia = parseFloat(a.imdbRating) || 0;
+    const ib = parseFloat(b.imdbRating) || 0;
+    return ib - ia;
   });
 
   res.status(200).json({
