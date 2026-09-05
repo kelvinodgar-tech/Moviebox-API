@@ -52,6 +52,14 @@
       return r.json();
     });
   }
+  // Build a proxied media URL. The CDN (bcdnxw.hakunaymatata.com) requires a
+  // Referer header and returns 429 without it, so a browser <video> tag cannot
+  // play the raw MP4. /api/stream adds the header server-side.
+  function streamProxyUrl(mediaUrl) {
+    if (!mediaUrl) return "";
+    var base = API_BASE || "";
+    return base + "/api/stream?url=" + encodeURIComponent(mediaUrl);
+  }
   function toast(msg, kind) {
     var wrap = $(".toast-wrap");
     if (!wrap) {
@@ -99,7 +107,7 @@
       + '<a class="card" href="detail.html?path=' + dp + '">'
       +   '<div class="card-poster">'
       +     (cover
-          ? '<img loading="lazy" src="' + escapeHtml(cover) + '" alt="' + title + '" onerror="this.style.display=\'none\';this.parentElement.innerHTML+=\'' + posterFallback().replace(/'/g, "\\'") + '\'">'
+          ? '<img loading="lazy" decoding="async" src="' + escapeHtml(cover) + '" alt="' + title + '" onerror="this.style.display=\'none\';this.parentElement.innerHTML+=\'' + posterFallback().replace(/'/g, "\\'") + '\'">'
           : posterFallback())
       +     ratingStar(rating)
       +     typeBadge(type)
@@ -135,6 +143,42 @@
     var input = $("#site-search");
     if (!input) return;
     var form = input.closest("form") || input.parentElement;
+
+    // Autocomplete dropdown (debounced, calls /api/search-suggest via our API).
+    var dropdown = el("div", { class: "suggest-dropdown", style: "display:none" });
+    input.parentNode.appendChild(dropdown);
+    var suggestTimer = null;
+    var lastQ = "";
+    function showSuggestions(items) {
+      if (!items || !items.length) { dropdown.style.display = "none"; dropdown.innerHTML = ""; return; }
+      dropdown.innerHTML = items.slice(0, 8).map(function (w) {
+        return '<a class="suggest-item" href="search.html?q=' + encodeURIComponent(w) + '">' + escapeHtml(w) + '</a>';
+      }).join("");
+      dropdown.style.display = "block";
+    }
+    input.addEventListener("input", function () {
+      var q = (input.value || "").trim();
+      if (q.length < 2) { dropdown.style.display = "none"; return; }
+      if (q === lastQ) return;
+      lastQ = q;
+      clearTimeout(suggestTimer);
+      suggestTimer = setTimeout(function () {
+        // /api/search returns suggestions in its response; we use the small
+        // ?limit=1 variant to keep the payload tiny.
+        fetch(API_BASE + "/api/search?q=" + encodeURIComponent(q) + "&limit=1")
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) { if (d && d.suggestions) showSuggestions(d.suggestions); })
+          .catch(function () {});
+      }, 220);
+    });
+    input.addEventListener("blur", function () {
+      // Delay so a click on an item registers first.
+      setTimeout(function () { dropdown.style.display = "none"; }, 150);
+    });
+    input.addEventListener("focus", function () {
+      if (dropdown.children.length) dropdown.style.display = "block";
+    });
+
     function submit(e) {
       e.preventDefault();
       var q = (input.value || "").trim();
@@ -169,6 +213,18 @@
         $("#hero").style.display = "none";
         return;
       }
+      // Preload the first hero image so it paints immediately.
+      (function () {
+        var first = heroItems[0];
+        var img = (first && (first.bannerImage || first.cover)) || "";
+        if (img) {
+          var l = document.createElement("link");
+          l.rel = "preload";
+          l.as = "image";
+          l.href = img;
+          document.head.appendChild(l);
+        }
+      })();
       heroTrack.innerHTML = heroItems.map(function (it, i) {
         var img = it.bannerImage || it.cover || "";
         var rating = it.imdbRatingValue ? parseFloat(it.imdbRatingValue).toFixed(1) : "";
@@ -216,13 +272,83 @@
     }
 
     function renderSections(sections) {
-      sectionsWrap.innerHTML = sections.filter(function (s) { return s.items && s.items.length; }).map(function (s) {
+      var valid = sections.filter(function (s) { return s.items && s.items.length; });
+      if (!valid.length) {
+        sectionsWrap.innerHTML = '';
+        return;
+      }
+      // Mobile performance: only render the first INITIAL_SECTIONS up front.
+      // The rest are rendered lazily when a sentinel scrolls into view.
+      var isMobile = window.matchMedia("(max-width: 767px)").matches;
+      var INITIAL_SECTIONS = isMobile ? 5 : valid.length;
+      var queued = valid.slice(INITIAL_SECTIONS);
+
+      function sectionHTML(s, lazy) {
         return ''
-          + '<section class="section">'
+          + '<section class="section' + (lazy ? " lazy-section" : "") + '">'
           +   '<div class="section-head"><h3 class="section-title">' + escapeHtml(s.title) + '</h3></div>'
           +   '<div class="grid">' + s.items.map(cardHTML).join("") + '</div>'
           + '</section>';
+      }
+
+      sectionsWrap.innerHTML = valid.slice(0, INITIAL_SECTIONS).map(function (s) {
+        return sectionHTML(s, false);
       }).join("");
+
+      // No queue -> done.
+      if (!queued.length) return;
+
+      // Add a sentinel + a "Load more" button (the button is a fallback for
+      // browsers without IntersectionObserver, and for users who prefer to
+      // control loading).
+      var sentinel = el("div", { class: "load-more-sentinel", id: "sections-sentinel" });
+      var btn = el("button", {
+        class: "btn btn-ghost btn-sm",
+        text: "Load more sections (" + queued.length + ")",
+        onclick: function () { loadNextBatch(); }
+      });
+      sentinel.appendChild(btn);
+      sectionsWrap.appendChild(sentinel);
+
+      var loading = false;
+      function loadNextBatch() {
+        if (loading || !queued.length) return;
+        loading = true;
+        btn.textContent = "Loading...";
+        // Defer to next frame so the spinner can paint.
+        requestAnimationFrame(function () {
+          var batch = queued.splice(0, 3);
+          var frag = document.createDocumentFragment();
+          batch.forEach(function (s) {
+            var wrap = el("div", { html: sectionHTML(s, true) });
+            while (wrap.firstChild) frag.appendChild(wrap.firstChild);
+          });
+          sectionsWrap.insertBefore(frag, sentinel);
+          // Reveal lazily-rendered sections.
+          requestAnimationFrame(function () {
+            $all(".lazy-section", sectionsWrap).forEach(function (node) {
+              node.classList.add("shown");
+            });
+          });
+          if (queued.length) {
+            btn.textContent = "Load more sections (" + queued.length + ")";
+            loading = false;
+          } else {
+            sentinel.parentNode && sentinel.parentNode.removeChild(sentinel);
+          }
+          loading = false;
+        });
+      }
+
+      // Auto-load when the sentinel scrolls into view.
+      if ("IntersectionObserver" in window) {
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) loadNextBatch();
+          });
+        }, { rootMargin: "300px" });
+        io.observe(sentinel);
+      }
     }
 
     // Load trending
@@ -243,9 +369,12 @@
   }
 
   // ---------- Page: search ----------
+  var searchState = { q: "", page: 1, limit: 20, total: 0, loading: false };
+
   function initSearch() {
     var grid = $("#results-grid");
     var titleEl = $("#results-title");
+    var suggestEl = $("#search-suggestions");
     var params = new URLSearchParams(window.location.search);
     var q = (params.get("q") || "").trim();
     if (!q) {
@@ -253,13 +382,78 @@
       grid.innerHTML = '<div class="empty-state"><div>Use the search bar above to find movies and TV shows.</div></div>';
       return;
     }
+    searchState.q = q;
+    searchState.page = 1;
+    searchState.total = 0;
     titleEl.innerHTML = 'Results for <span style="color:var(--accent)">' + escapeHtml(q) + '</span>';
     grid.innerHTML = skeletonCards(12);
-    api("/api/search?q=" + encodeURIComponent(q) + "&limit=30").then(function (data) {
-      titleEl.innerHTML = 'Results for <span style="color:var(--accent)">' + escapeHtml(q) + '</span> <span class="text-muted">(' + (data.count || 0) + ')</span>';
-      renderGrid(grid, data.results || []);
+    loadSearchPage();
+  }
+
+  function loadSearchPage() {
+    if (searchState.loading) return;
+    searchState.loading = true;
+    var grid = $("#results-grid");
+    var titleEl = $("#results-title");
+    var suggestEl = $("#search-suggestions");
+    var isFirst = searchState.page === 1;
+    if (isFirst) grid.innerHTML = skeletonCards(12);
+
+    var url = "/api/search?q=" + encodeURIComponent(searchState.q)
+      + "&limit=" + searchState.limit + "&page=" + searchState.page;
+    api(url).then(function (data) {
+      searchState.total = data.total || 0;
+      var results = data.results || [];
+      var suggestions = data.suggestions || [];
+
+      titleEl.innerHTML = 'Results for <span style="color:var(--accent)">' + escapeHtml(searchState.q) + '</span>'
+        + ' <span class="text-muted">(' + searchState.total + ' found' + (data.sources ? '; home ' + (data.sources.home||0) + ' + trending ' + (data.sources.trending||0) : '') + ')</span>';
+
+      // Suggestions (autocomplete from the backend).
+      if (suggestEl) {
+        if (suggestions.length) {
+          suggestEl.style.display = "";
+          suggestEl.innerHTML = '<span class="text-muted" style="font-size:13px;margin-right:8px">Try also:</span>'
+            + suggestions.slice(0, 8).map(function (w) {
+                return '<a class="genre-tag" href="search.html?q=' + encodeURIComponent(w) + '">' + escapeHtml(w) + '</a>';
+              }).join("");
+        } else {
+          suggestEl.style.display = "none";
+          suggestEl.innerHTML = "";
+        }
+      }
+
+      if (isFirst) {
+        renderGrid(grid, results);
+      } else {
+        // Append to existing grid.
+        if (results.length) grid.insertAdjacentHTML("beforeend", results.map(cardHTML).join(""));
+      }
+
+      // "Load more" button.
+      var existing = $("#search-load-more");
+      if (existing) existing.parentNode.removeChild(existing);
+      if (data.hasMore && results.length) {
+        var wrap = el("div", { id: "search-load-more", style: "grid-column:1/-1;display:flex;justify-content:center;padding:20px 0" });
+        var btn = el("button", {
+          class: "btn btn-ghost",
+          text: "Load more (" + (searchState.total - (searchState.page * searchState.limit)) + " left)",
+          onclick: function () {
+            searchState.page++;
+            loadSearchPage();
+          }
+        });
+        wrap.appendChild(btn);
+        grid.appendChild(wrap);
+      }
+
+      if (isFirst && results.length === 0) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 21l-4.35-4.35M11 19a8 8 0 110-16 8 8 0 010 16z"/></svg><div>No titles found for " ' + escapeHtml(searchState.q) + ' ". Try a different keyword.</div></div>';
+      }
+      searchState.loading = false;
     }).catch(function (e) {
       grid.innerHTML = '<div class="error-box">Search failed: ' + escapeHtml(e.message) + '</div>';
+      searchState.loading = false;
     });
   }
 
@@ -327,7 +521,7 @@
       +   '<div class="container">'
       +     '<div class="detail-grid">'
       +       '<div class="detail-poster">'
-      +         (info.cover ? '<img src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title) + '">' : posterFallback())
+      +         (info.cover ? '<img loading="lazy" decoding="async" src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title) + '">' : posterFallback())
       +       '</div>'
       +       '<div class="detail-info">'
       +         '<h1>' + escapeHtml(info.title || "Untitled") + '</h1>'
@@ -371,7 +565,7 @@
             var initial = (c.name || "?").charAt(0).toUpperCase();
             return ''
               + '<div class="cast-card">'
-              +   '<div class="cast-photo">' + (c.avatarUrl ? '<img src="' + escapeHtml(c.avatarUrl) + '" alt="' + escapeHtml(c.name) + '" onerror="this.style.display=\'none\'">' : escapeHtml(initial)) + '</div>'
+              +   '<div class="cast-photo">' + (c.avatarUrl ? '<img loading="lazy" decoding="async" src="' + escapeHtml(c.avatarUrl) + '" alt="' + escapeHtml(c.name) + '" onerror="this.style.display=\'none\'">' : escapeHtml(initial)) + '</div>'
               +   '<div class="cast-info">'
               +     '<div class="cast-name">' + escapeHtml(c.name || "") + '</div>'
               +     '<div class="cast-char">' + escapeHtml(c.character || c.role || "") + '</div>'
@@ -520,6 +714,10 @@
     body.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching streams...</div>';
     modal.classList.add("open");
     document.body.style.overflow = "hidden";
+    // On mobile the modal is full-screen; scroll the content to the top so
+    // the video is immediately visible.
+    body.scrollTop = 0;
+    if (body.scrollTo) body.scrollTo(0, 0);
 
     var url = "/api/" + (season ? "tv" : "movie") + "/" + encodeURIComponent(detailPath);
     if (season) url += "?season=" + season + "&episode=" + episode;
@@ -548,8 +746,11 @@
       return '<button class="quality-btn' + active + vip + '"' + disabled + ' data-res="' + q.resolution + '">' + q.resolution + 'P' + (q.vipLocked ? ' <span class="vip-tag">VIP</span>' : '') + '</button>';
     }).join("");
 
+    // Route the MP4 through /api/stream so the browser can play it (the CDN
+    // requires a Referer header and returns 429 without it).
+    var playSrc = streamProxyUrl(quality.url);
     body.innerHTML = ''
-      + '<div class="player-video"><video src="' + escapeHtml(quality.url) + '" controls autoplay playsinline></video></div>'
+      + '<div class="player-video"><video src="' + escapeHtml(playSrc) + '" controls autoplay playsinline></video></div>'
       + '<div class="quality-bar">'
       +   '<span class="quality-label">Quality:</span>'
       +   qButtons
@@ -564,7 +765,7 @@
         if (!q || !q.url) return;
         var video = $("video", body);
         var t = video ? video.currentTime : 0;
-        video.src = q.url;
+        video.src = streamProxyUrl(q.url);
         video.play().then(function () { if (t) try { video.currentTime = t; } catch (e) {} }).catch(function () {});
         detailState.selectedQuality = q;
         $all(".quality-btn", body).forEach(function (x) { x.classList.toggle("active", x === b); });
@@ -618,11 +819,11 @@
           +     '<div class="download-meta">' + escapeHtml(metaParts) + '</div>'
           +   '</div>'
           +   (q.url && !q.vipLocked
-              ? '<a class="btn btn-primary btn-sm" href="' + escapeHtml(q.url) + '" target="_blank" rel="noopener" download><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</a>'
+              ? '<a class="btn btn-primary btn-sm" href="' + escapeHtml(streamProxyUrl(q.url)) + '" target="_blank" rel="noopener" download><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</a>'
               : '<span class="btn btn-ghost btn-sm" style="cursor:not-allowed;opacity:.5">VIP only</span>')
           + '</div>';
       }).join("") + '</div>'
-      + '<div class="text-muted mt-4" style="font-size:12px">Links expire in ~24 hours. Right-click and "Save link as" if the file opens in the browser.</div>';
+      + '<div class="text-muted mt-4" style="font-size:12px">Links expire in ~24 hours. Downloads are routed through the /api/stream proxy so the CDN accepts them. Right-click and "Save link as" if the file opens in the browser instead of downloading.</div>';
     }).catch(function (e) {
       body.innerHTML = '<div class="error-box">Failed to load download links: ' + escapeHtml(e.message) + '</div>';
     });
@@ -644,7 +845,7 @@
     if (!modal) return;
     $("#trailer-title").textContent = "Trailer - " + title;
     var body = $("#trailer-body");
-    body.innerHTML = '<div class="player-video"><video src="' + escapeHtml(url) + '" controls autoplay playsinline></video></div>';
+    body.innerHTML = '<div class="player-video"><video src="' + escapeHtml(streamProxyUrl(url)) + '" controls autoplay playsinline></video></div>';
     modal.classList.add("open");
     document.body.style.overflow = "hidden";
     var closer = modal.querySelector("[data-close-modal]");

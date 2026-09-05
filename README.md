@@ -60,13 +60,14 @@ and JavaScript (no framework, no build step). Pages:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/home` | Full home page: banners, sections, all subjects |
-| GET | `/api/trending?limit=20` | Trending movies and shows |
-| GET | `/api/search?q=lucifer&limit=10` | Search by title |
-| GET | `/api/details/:detailPath` | Full details and cast |
+| GET | `/api/trending?limit=20` | Trending movies and shows (rich fields) |
+| GET | `/api/search?q=lucifer&limit=20&page=1` | Search by title (home + trending, de-duplicated, with autocomplete suggestions) |
+| GET | `/api/details/:detailPath` | Full details, cast, dubs and trailer |
 | GET | `/api/seasons/:detailPath` | Seasons with episode counts and resolutions |
 | GET | `/api/movie/:detailPath` | Movie stream/download URLs |
 | GET | `/api/tv/:detailPath?season=1&episode=1` | TV episode stream/download URLs |
 | GET | `/api/captions/:detailPath?season=1&episode=1` | Subtitle URLs |
+| GET | `/api/stream?url=<encoded-media-url>` | Media proxy: forwards a CDN URL with the required `Referer` header so the browser can play/download MP4s |
 | GET | `/moviebox_scraper.py` | Download the Python scraper |
 
 All endpoints:
@@ -158,37 +159,53 @@ Response:
 
 ---
 
-### GET /api/search?q=...&limit=10
+### GET /api/search?q=...&limit=20&page=1
 
-Searches the home page for matching titles. Returns the detailPath you need
-for the other endpoints, plus cover, rating, genre, country and other fields
-for each result.
+Searches movies and TV shows by title. The backend's own `/subject/search`
+endpoint requires a non-anonymous token and rejects anonymous callers, so
+this endpoint combines two anonymous-friendly sources and de-duplicates them:
+
+1. `/subject/search-suggest` (autocomplete suggestions, returned in the
+   `suggestions` field)
+2. `/home` (~376 subjects on the home page)
+3. `/subject/trending?perPage=100` (up to 100 trending titles)
+
+Titles from sources 2 and 3 are merged by `subjectId`, filtered by the query
+(case-insensitive substring on the title), sorted by IMDB rating, and returned
+with rich fields (cover, rating, genre, country, description, releaseDate,
+etc). Supports `page` + `limit` for pagination.
 
 ```bash
-curl "https://moviebox-api-eight.vercel.app/api/search?q=all%20american&limit=10"
+curl "https://moviebox-api-eight.vercel.app/api/search?q=oppenheimer&limit=10"
 ```
 
 Response:
 
 ```json
 {
-  "query": "all american",
+  "query": "oppenheimer",
+  "page": 1,
+  "limit": 10,
+  "total": 1,
   "count": 1,
+  "hasMore": false,
+  "sources": { "home": 376, "trending": 100 },
+  "suggestions": ["Oppenheimer", "Oppenheimer: The Real Story", "Alan Oppenheimer"],
   "results": [
     {
-      "title": "All American",
-      "subjectId": "1167223938976469784",
-      "subjectType": 2,
-      "type": "tv",
-      "detailPath": "all-american-qHnle0GTdo1",
+      "title": "Oppenheimer",
+      "subjectId": "326494254824573768",
+      "subjectType": 1,
+      "type": "movie",
+      "detailPath": "oppenheimer-Akh5Nrwl7o",
       "description": "...",
-      "releaseDate": "2018-10-10",
-      "duration": 0,
-      "genre": "Drama,Sport",
+      "releaseDate": "2023-07-19",
+      "duration": 10800,
+      "genre": "Drama,History",
       "cover": "https://pbcdnw.aoneroom.com/image/...",
       "countryName": "United States",
-      "imdbRatingValue": "7.4",
-      "imdbRatingCount": 28000,
+      "imdbRatingValue": "8.3",
+      "imdbRatingCount": 780000,
       "subtitles": "English,...",
       "hasResource": true
     }
@@ -416,6 +433,48 @@ Response:
 If the play endpoint is rate-limited and no video id can be resolved, the
 endpoint returns a 404 with a message telling the caller to retry in 2-3
 minutes.
+
+---
+
+### GET /api/stream?url=<encoded-media-url>
+
+Media proxy. The video CDN (`bcdnxw.hakunaymatata.com`) requires a
+`Referer: https://netnaija.film/` header on every request and returns HTTP 429
+without it. A browser `<video>` tag or a plain `curl -O` cannot set that
+header for a cross-origin resource, so the in-page player and the download
+buttons route MP4 URLs through this proxy. It streams the response body (it
+does not buffer the whole file) and forwards `Range` requests so the browser
+can seek.
+
+Only the known media CDN hosts are allowed (`bcdnxw.hakunaymatata.com`,
+`cacdn.hakunaymatata.com`, `macdn.aoneroom.com`, `pbcdnw.aoneroom.com`).
+
+```bash
+# Play an MP4 in a browser
+open "https://moviebox-api-eight.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
+
+# Download via curl
+curl -O "https://moviebox-api-eight.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
+```
+
+The `/api/details` response now also includes a `dubs` array (alternative
+audio + subtitle language tracks). Each entry:
+
+```json
+{
+  "subjectId": "2955180061147678728",
+  "lanName": "Arabic sub",
+  "lanCode": "ar",
+  "original": false,
+  "type": 1,
+  "kind": "subtitle",
+  "detailPath": "lucifer-uDYzEbSKiw3"
+}
+```
+
+- `type=0, kind="dub"` -> a dubbed audio track
+- `type=1, kind="subtitle"` -> a subtitle-language variant
+- `original=true` -> the original-language track
 
 ---
 
