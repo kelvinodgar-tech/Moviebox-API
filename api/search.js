@@ -1,27 +1,16 @@
-// GET /api/search?q=oppenheimer&limit=20
-// Searches across multiple data sources: search-suggest, trending (5 pages), and home page.
-// Returns combined, deduplicated results with full metadata.
+// GET /api/search?q=Bridgerton&limit=20
+// Scrapes the actual search pages on netnaija.film, movieboxonline.net, and officialmoviebox.com.
+// No login/token needed. Returns full results with covers, ratings, genres.
 
-const API = "https://h5-api.aoneroom.com";
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
-function hdr() {
-  return {
-    "User-Agent": UA,
-    "Accept": "application/json",
-    "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-    "Origin": "https://netnaija.film",
-    "Referer": "https://netnaija.film/",
-  };
-}
-
 function norm(s) {
-  if (!s || !s.title) return null;
+  if (!s) return null;
   return {
-    title: s.title,
+    title: s.title || "",
     subjectId: String(s.subjectId || s.id || ""),
     subjectType: s.subjectType,
-    detailPath: s.detailPath,
+    detailPath: s.detailPath || "",
     type: s.subjectType === 1 ? "movie" : (s.subjectType === 2 ? "tv" : "other"),
     genre: s.genre || "",
     imdbRating: s.imdbRatingValue || s.imdbRating || "",
@@ -30,99 +19,80 @@ function norm(s) {
     description: s.description || "",
     releaseDate: s.releaseDate || "",
     duration: s.duration || 0,
-    cover: s.cover?.url || "",
+    cover: s.cover?.url || (typeof s.cover === "string" ? s.cover : "") || "",
     hasResource: s.hasResource || false,
   };
 }
 
+function extractSubjectsFromNuxt(nuxt) {
+  const results = [];
+  const seen = new Set();
+  
+  function walk(o) {
+    if (!o || typeof o !== "object") return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (o.subjectId && o.title && o.detailPath) {
+      const sid = String(o.subjectId);
+      if (!seen.has(sid)) {
+        seen.add(sid);
+        results.push(norm(o));
+      }
+    }
+    Object.values(o).forEach(walk);
+  }
+  walk(nuxt);
+  return results;
+}
+
 export default async function handler(req, res) {
-  const q = (req.query.q || "").toLowerCase().trim();
+  const q = (req.query.q || "").trim();
   const limit = parseInt(req.query.limit) || 20;
 
   if (!q) {
-    return res.status(400).json({ error: "Missing q parameter. Example: /api/search?q=oppenheimer&limit=20" });
+    return res.status(400).json({ error: "Missing q parameter. Example: /api/search?q=Bridgerton" });
   }
 
+  const encoded = encodeURIComponent(q);
   const seen = new Set();
   const results = [];
-  const suggestions = [];
   const errors = [];
 
-  // 1. Search suggestions (autocomplete)
-  try {
-    const r = await fetch(`${API}/wefeed-h5api-bff/subject/search-suggest`, {
-      method: "POST",
-      headers: { ...hdr(), "Content-Type": "application/json" },
-      body: JSON.stringify({ keyword: q, perPage: 10 }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (r.ok) {
-      const d = await r.json();
-      for (const item of (d.data?.items || [])) {
-        if (item.word) suggestions.push(item.word);
-        if (item.subject) {
-          const n = norm(item.subject);
-          if (n && !seen.has(n.subjectId)) {
-            seen.add(n.subjectId);
-            results.push(n);
-          }
-        }
-      }
-    }
-  } catch (e) { errors.push("suggest: " + e.message); }
+  // Try all 3 sites in parallel
+  const sites = [
+    { name: "netnaija", url: `https://netnaija.film/search-result?keyword=${encoded}` },
+    { name: "officialmoviebox", url: `https://officialmoviebox.com/newWeb/searchResult?keyword=${encoded}` },
+    { name: "movieboxonline", url: `https://movieboxonline.net/search-result?keyword=${encoded}` },
+  ];
 
-  // 2. Search trending (5 pages x 100 = 500 items)
-  try {
-    const pages = await Promise.all([1, 2, 3, 4, 5].map(async (page) => {
-      try {
-        const r = await fetch(`${API}/wefeed-h5api-bff/subject/trending?page=${page}&perPage=100`, {
-          headers: hdr(),
-          signal: AbortSignal.timeout(10000),
-        });
-        if (!r.ok) return [];
-        const d = await r.json();
-        return d.data?.subjectList || d.data || [];
-      } catch { return []; }
-    }));
-    for (const items of pages) {
-      for (const m of items) {
-        const n = norm(m);
-        if (n && !seen.has(n.subjectId)) {
-          seen.add(n.subjectId);
-          if (n.title.toLowerCase().includes(q)) {
-            results.push(n);
-          }
-        }
-      }
-    }
-  } catch (e) { errors.push("trending: " + e.message); }
-
-  // 3. Search home page (~600 subjects)
-  try {
-    const r = await fetch(`${API}/wefeed-h5api-bff/home?host=netnaija.film`, {
-      headers: hdr(),
+  const responses = await Promise.allSettled(sites.map(async (site) => {
+    const r = await fetch(site.url, {
+      headers: { "User-Agent": UA, "Accept": "text/html" },
       signal: AbortSignal.timeout(12000),
     });
-    if (r.ok) {
-      const text = await r.text();
-      try {
-        const homeData = JSON.parse(text);
-        function walk(o) {
-          if (!o || typeof o !== "object") return;
-          if (Array.isArray(o)) { o.forEach(walk); return; }
-          if (o.subjectId && o.title && !seen.has(String(o.subjectId))) {
-            const n = norm(o);
-            if (n && n.title.toLowerCase().includes(q)) {
-              seen.add(n.subjectId);
-              results.push(n);
-            }
-          }
-          Object.values(o).forEach(walk);
+    if (!r.ok) throw new Error(`${site.name}: HTTP ${r.status}`);
+    const html = await r.text();
+    
+    // Parse __NUXT_DATA__ from the HTML
+    const m = html.match(/<script[^>]*id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) throw new Error(`${site.name}: no NUXT_DATA`);
+    
+    const nuxt = JSON.parse(m[1]);
+    const subjects = extractSubjectsFromNuxt(nuxt);
+    return { site: site.name, subjects };
+  }));
+
+  for (const r of responses) {
+    if (r.status === "fulfilled" && r.value.subjects.length > 0) {
+      for (const s of r.value.subjects) {
+        if (s && s.title && !seen.has(s.subjectId)) {
+          seen.add(s.subjectId);
+          results.push(s);
         }
-        walk(homeData.data);
-      } catch {}
+      }
+    } else if (r.status === "rejected") {
+      errors.push(r.reason.message);
     }
-  } catch (e) { errors.push("home: " + e.message); }
+  }
 
   // Sort by rating
   results.sort((a, b) => {
@@ -135,7 +105,6 @@ export default async function handler(req, res) {
     query: q,
     count: Math.min(results.length, limit),
     total: results.length,
-    suggestions: suggestions.slice(0, 10),
     results: results.slice(0, limit),
   });
 }
