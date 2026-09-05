@@ -1,5 +1,4 @@
 {
-  "framework": null,
   "rewrites": [
     {
       "source": "/api/movie/:detailPath",
