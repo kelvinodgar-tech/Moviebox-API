@@ -89,6 +89,19 @@ export default async function handler(req, res) {
     const trailer = subject.trailer || {};
     const trailerVideo = trailer.videoAddress || {};
 
+    // Dubs / alternative audio + subtitle language tracks.
+    // type: 0 = dubbed audio, 1 = subtitle language variant.
+    // `original` is true for the original-language track.
+    const dubs = (subject.dubs || []).map((d) => ({
+      subjectId: String(d.subjectId || ""),
+      lanName: d.lanName || "",
+      lanCode: d.lanCode || "",
+      original: !!d.original,
+      type: d.type,
+      kind: d.type === 1 ? "subtitle" : "dub",
+      detailPath: d.detailPath || "",
+    }));
+
     const result = {
       detailPath,
       subjectId: String(subject.subjectId || ""),
@@ -118,6 +131,8 @@ export default async function handler(req, res) {
       },
       cast,
       castCount: cast.length,
+      dubs,
+      dubCount: dubs.length,
     };
 
     return res.status(200).json(result);

@@ -1,8 +1,26 @@
-// GET /api/search?q=oppenheimer&limit=5
-// Searches the home page for matching titles. Returns the detailPath you need
-// for the movie/tv/details endpoints, plus cover, rating, genre, country and
-// other available fields for each result.
-// Example: /api/search?q=all%20american&limit=10
+// GET /api/search?q=oppenheimer&limit=20&page=1
+// Search movies and TV shows.
+//
+// Strategy (the backend's own /subject/search endpoint requires a non-anonymous
+// token and rejects anonymous callers with "invalid token", so we cannot use it
+// directly). Instead we combine two anonymous-friendly sources and de-duplicate:
+//
+//   1. /wefeed-h5api-bff/subject/search-suggest  (autocomplete suggestions,
+//      works without a token). Used to populate `suggestions` in the response.
+//   2. /wefeed-h5api-bff/home?host=netnaija.film (~376 subjects on the home page).
+//   3. /wefeed-h5api-bff/subject/trending?perPage=100 (up to 100 trending titles).
+//
+// Titles from sources 2 and 3 are merged, de-duplicated by subjectId, filtered
+// by the query (case-insensitive substring on the title), sorted by IMDB rating,
+// and returned with rich fields (cover, rating, genre, country, description,
+// releaseDate, etc).
+//
+// NOTE on /subject/filter: it accepts a `keyword` field but ignores it (the
+// totalCount comes back as 1000000 and the items are unrelated to the keyword),
+// so it is not useful for keyword search and is intentionally not used here.
+//
+// Example: /api/search?q=oppenheimer&limit=10
+//          /api/search?q=oppenheimer&limit=20&page=1
 
 const API = "https://h5-api.aoneroom.com";
 const UA =
@@ -18,6 +36,126 @@ function commonHeaders(referer) {
   };
 }
 
+function fetchWithTimeout(url, opts, ms) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms || 15000);
+  return fetch(url, { ...(opts || {}), signal: controller.signal }).finally(
+    () => clearTimeout(timeout)
+  );
+}
+
+// Normalize a raw subject object (from home or trending) into a clean shape.
+function normalizeSubject(s) {
+  if (!s) return null;
+  const subjectId = String(s.subjectId || "");
+  const detailPath = s.detailPath || "";
+  if (!subjectId || !detailPath) return null;
+  return {
+    subjectId,
+    subjectType: s.subjectType,
+    type: s.subjectType === 1 ? "movie" : "tv",
+    title: s.title || "",
+    description: s.description || "",
+    releaseDate: s.releaseDate || "",
+    duration: s.duration || 0,
+    genre: s.genre || "",
+    cover: s.cover?.url || "",
+    countryName: s.countryName || "",
+    imdbRatingValue: s.imdbRatingValue || "",
+    imdbRatingCount: s.imdbRatingCount || 0,
+    subtitles: s.subtitles || "",
+    hasResource: !!s.hasResource,
+    detailPath,
+  };
+}
+
+// Walk a home response and collect every subject, de-duplicated by subjectId.
+function extractHomeSubjects(homeData) {
+  const seen = new Map();
+  function walk(o) {
+    if (!o || typeof o !== "object") return;
+    if (Array.isArray(o)) {
+      o.forEach(walk);
+      return;
+    }
+    const norm = normalizeSubject(o);
+    if (norm && !seen.has(norm.subjectId)) {
+      seen.set(norm.subjectId, norm);
+    }
+    Object.values(o).forEach(walk);
+  }
+  walk(homeData);
+  return [...seen.values()];
+}
+
+// Fetch /home and return its .data (or null on failure).
+async function fetchHome() {
+  try {
+    const resp = await fetchWithTimeout(
+      `${API}/wefeed-h5api-bff/home?host=netnaija.film`,
+      { headers: commonHeaders("https://netnaija.film/") },
+      15000
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data?.data || null;
+  } catch {
+    return null;
+  }
+}
+
+// Fetch /subject/trending and return normalized subjects (or [] on failure).
+async function fetchTrending(perPage) {
+  try {
+    const resp = await fetchWithTimeout(
+      `${API}/wefeed-h5api-bff/subject/trending?page=1&perPage=${perPage}`,
+      { headers: commonHeaders("https://netnaija.film/") },
+      15000
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const items = data?.data?.subjectList || data?.data || [];
+    return items.map(normalizeSubject).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Fetch /subject/search-suggest for autocomplete. Returns string[] of words.
+async function fetchSuggestions(keyword, perPage) {
+  if (!keyword) return [];
+  try {
+    const resp = await fetchWithTimeout(
+      `${API}/wefeed-h5api-bff/subject/search-suggest`,
+      {
+        method: "POST",
+        headers: {
+          ...commonHeaders("https://netnaija.film/"),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ keyword, perPage: perPage || 10 }),
+      },
+      10000
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const items = data?.data?.items || [];
+    // Each item has {type, word, subject}. We return the word strings.
+    const words = [];
+    const seen = new Set();
+    for (const it of items) {
+      const w = (it.word || "").trim();
+      if (w && !seen.has(w.toLowerCase())) {
+        seen.add(w.toLowerCase());
+        words.push(w);
+      }
+    }
+    return words;
+  } catch {
+    return [];
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -27,85 +165,71 @@ export default async function handler(req, res) {
   }
 
   const q = (req.query.q || "").toLowerCase().trim();
-  const limit = parseInt(req.query.limit) || 10;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const rawQuery = req.query.q || "";
 
   if (!q) {
     return res.status(400).json({
-      error: "Missing q parameter. Example: /api/search?q=oppenheimer&limit=5",
+      error:
+        "Missing q parameter. Example: /api/search?q=oppenheimer&limit=20&page=1",
     });
   }
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    // Fire all three upstream calls in parallel. Each one degrades gracefully
+    // (returns null/[] on failure) so a single upstream hiccup does not break
+    // the whole search.
+    const [homeData, trending, suggestions] = await Promise.all([
+      fetchHome(),
+      fetchTrending(100),
+      fetchSuggestions(rawQuery, 10),
+    ]);
 
-    const resp = await fetch(`${API}/wefeed-h5api-bff/home?host=netnaija.film`, {
-      headers: commonHeaders("https://netnaija.film/"),
-      signal: controller.signal,
+    // Merge home + trending, de-duplicate by subjectId.
+    const merged = new Map();
+    const homeSubjects = homeData ? extractHomeSubjects(homeData) : [];
+    for (const s of homeSubjects) merged.set(s.subjectId, s);
+    for (const s of trending) {
+      if (!merged.has(s.subjectId)) merged.set(s.subjectId, s);
+    }
+
+    // Filter by query (case-insensitive substring on title) and sort by rating.
+    const all = [...merged.values()].filter((s) =>
+      (s.title || "").toLowerCase().includes(q)
+    );
+    all.sort((a, b) => {
+      const ra = parseFloat(a.imdbRatingValue) || 0;
+      const rb = parseFloat(b.imdbRatingValue) || 0;
+      if (rb !== ra) return rb - ra;
+      // Tie-break: alphabetical by title.
+      return (a.title || "").localeCompare(b.title || "");
     });
-    clearTimeout(timeout);
 
-    const text = await resp.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return res.status(502).json({ error: "Failed to parse home response", q });
-    }
-
-    // Walk the whole home response, collecting every subject object by subjectId.
-    const seen = new Map(); // subjectId -> normalized subject
-    function walk(o) {
-      if (!o || typeof o !== "object") return;
-      if (Array.isArray(o)) {
-        o.forEach(walk);
-        return;
-      }
-      const sid = o.subjectId;
-      const title = o.title;
-      const dp = o.detailPath;
-      if (sid && title && dp && !seen.has(String(sid))) {
-        seen.set(String(sid), {
-          title,
-          subjectId: String(sid),
-          subjectType: o.subjectType,
-          type: o.subjectType === 1 ? "movie" : "tv",
-          detailPath: dp,
-          description: o.description || "",
-          releaseDate: o.releaseDate || "",
-          duration: o.duration || 0,
-          genre: o.genre || "",
-          cover: o.cover?.url || "",
-          countryName: o.countryName || "",
-          imdbRatingValue: o.imdbRatingValue || "",
-          imdbRatingCount: o.imdbRatingCount || 0,
-          subtitles: o.subtitles || "",
-          hasResource: !!o.hasResource,
-        });
-      }
-      Object.values(o).forEach(walk);
-    }
-    walk(data.data);
-
-    // Filter by query and sort by best rating.
-    const results = [...seen.values()]
-      .filter((s) => s.title.toLowerCase().includes(q))
-      .sort((a, b) => {
-        const ra = parseFloat(a.imdbRatingValue) || 0;
-        const rb = parseFloat(b.imdbRatingValue) || 0;
-        return rb - ra;
-      })
-      .slice(0, limit);
+    const total = all.length;
+    const start = (page - 1) * limit;
+    const results = all.slice(start, start + limit);
 
     return res.status(200).json({
-      query: req.query.q,
+      query: rawQuery,
+      page,
+      limit,
+      total,
       count: results.length,
+      hasMore: start + limit < total,
+      sources: {
+        home: homeSubjects.length,
+        trending: trending.length,
+      },
+      suggestions,
       results,
     });
   } catch (e) {
     if (e.name === "AbortError") {
-      return res.status(504).json({ error: "Home page fetch timed out. Try again.", q });
+      return res
+        .status(504)
+        .json({ error: "Upstream fetch timed out. Try again.", q: rawQuery });
     }
-    return res.status(500).json({ error: e.message, q });
+    return res.status(500).json({ error: e.message, q: rawQuery });
   }
 }
