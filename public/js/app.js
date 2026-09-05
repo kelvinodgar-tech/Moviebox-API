@@ -77,20 +77,32 @@
     return String(s || "").replace(/[^\w.\- ]/g, "").replace(/\s+/g, "_").substring(0, 80) || "movie";
   }
 
-  // Format a season+episode as S01E013 (3-digit episode, 2-digit season).
+  // Format a season+episode tag as S{season}E{episode} (no zero padding).
   function seTag(season, episode) {
-    var s = String(season || 1).padStart(2, "0");
-    var e = String(episode || 0).padStart(3, "0");
-    return "S" + s + "E" + e;
+    return "S" + (season || 1) + "E" + (episode || 0);
   }
 
   // Build a download filename for the website download links.
+  // Movies: {title}_{quality}.mp4
+  // Series: {title}_S{season}E{episode}_{quality}.mp4
   function buildDownloadFilename(title, resolution, season, episode) {
     var q = (resolution || "video") + "P";
     if (season) {
       return safeName(title) + "_" + seTag(season, episode) + "_" + q + ".mp4";
     }
     return safeName(title) + "_" + q + ".mp4";
+  }
+
+  // Format a file size in bytes into a human-readable string.
+  // MB for sizes under 1 GB, GB for sizes 1 GB and above.
+  function formatFileSize(bytes) {
+    var b = parseInt(bytes, 10) || 0;
+    if (b <= 0) return "";
+    var mb = b / (1024 * 1024);
+    if (mb >= 1024) {
+      return (mb / 1024).toFixed(1) + " GB";
+    }
+    return Math.round(mb) + " MB";
   }
 
   // ---------- SRT parser (for subtitle overlay) ----------
@@ -547,16 +559,11 @@
     if (info.imdbRatingCount) facts.push(["IMDB Votes", Number(info.imdbRatingCount).toLocaleString()]);
     if (info.castCount != null) facts.push(["Cast", info.castCount + " people"]);
 
-    // Layout: backdrop wrapper containing the inline player + title + synopsis.
+    // 1. Cover + title + rating + genre + synopsis + action buttons.
     var html = ''
       + '<div class="detail-backdrop-wrap">'
       +   '<div class="detail-backdrop" style="background-image:url(\'' + escapeHtml(info.cover || "") + '\')"></div>'
       +   '<div class="container">'
-      // Inline player area (always at the top).
-      +     '<div class="inline-player-wrap" id="inline-player-wrap">'
-      +       '<div class="loading"><div class="spinner"></div>Preparing player...</div>'
-      +     '</div>'
-      // Title block (right below the player).
       +     '<div class="detail-title-block">'
       +       '<h1>' + escapeHtml(info.title || "Untitled") + '</h1>'
       +       '<div class="detail-meta">'
@@ -573,7 +580,15 @@
       +   '</div>'
       + '</div>';
 
-    // Languages section (info-only display).
+    // 3. Trailer (inline player, just above Languages and Details).
+    if (info.trailer && info.trailer.url) {
+      html += '<div class="container"><section class="section detail-block trailer-block">'
+        + '<div class="section-head"><h3 class="section-title">Trailer</h3></div>'
+        + '<div class="trailer-video" id="trailer-container"></div>'
+        + '</section></div>';
+    }
+
+    // 4. Languages section (info-only display).
     if (dubs.length || subTracks.length || subtitleList.length) {
       html += '<div class="container"><section class="section detail-block">'
         + '<div class="section-head"><h3 class="section-title">Languages</h3></div>'
@@ -598,7 +613,7 @@
       html += '</div></section></div>';
     }
 
-    // Facts section.
+    // 5. Facts section.
     if (facts.length) {
       html += '<div class="container"><section class="section detail-block">'
         + '<div class="section-head"><h3 class="section-title">Details</h3></div>'
@@ -608,7 +623,22 @@
         + '</section></div>';
     }
 
-    // Cast section.
+    // 6. TV: seasons + episodes (with pagination for >24 episodes).
+    //    Comes BEFORE the cast section.
+    if (type === "tv" && detailState.seasons && detailState.seasons.seasons && detailState.seasons.seasons.length) {
+      detailState.currentSeason = detailState.seasons.seasons[0].season;
+      detailState.currentEpisode = 0; // no episode auto-selected
+      html += '<div class="container"><section class="section detail-block" id="episodes-section">'
+        +   '<div class="section-head"><h3 class="section-title">Episodes <span class="accent" id="episodes-season-label">- Season ' + detailState.currentSeason + '</span></h3></div>'
+        +   '<div class="season-bar" id="season-bar"></div>'
+        +   '<div class="ep-toolbar" id="ep-toolbar"></div>'
+        +   '<div class="episode-list" id="episode-list"></div>'
+        + '</section></div>';
+    } else if (type === "tv") {
+      html += '<div class="container"><section class="section detail-block"><div class="empty-state">No season information available for this title.</div></section></div>';
+    }
+
+    // 7. Cast section (last).
     if (info.cast && info.cast.length) {
       html += '<div class="container"><section class="section detail-block">'
         + '<div class="section-head"><h3 class="section-title">Cast &amp; Crew <span class="accent">(' + info.cast.length + ')</span></h3></div>'
@@ -626,28 +656,6 @@
         + '</section></div>';
     }
 
-    // TV: seasons + episodes (with pagination for >24 episodes).
-    if (type === "tv" && detailState.seasons && detailState.seasons.seasons && detailState.seasons.seasons.length) {
-      detailState.currentSeason = detailState.seasons.seasons[0].season;
-      detailState.currentEpisode = 0; // no episode auto-selected
-      html += '<div class="container"><section class="section detail-block" id="episodes-section">'
-        +   '<div class="section-head"><h3 class="section-title">Episodes <span class="accent" id="episodes-season-label">- Season ' + detailState.currentSeason + '</span></h3></div>'
-        +   '<div class="season-bar" id="season-bar"></div>'
-        +   '<div class="ep-toolbar" id="ep-toolbar"></div>'
-        +   '<div class="episode-list" id="episode-list"></div>'
-        + '</section></div>';
-    } else if (type === "tv") {
-      html += '<div class="container"><section class="section detail-block"><div class="empty-state">No season information available for this title.</div></section></div>';
-    }
-
-    // Inline trailer section (below everything else).
-    if (info.trailer && info.trailer.url) {
-      html += '<div class="container"><section class="section detail-block trailer-block">'
-        + '<div class="section-head"><h3 class="section-title">Trailer</h3></div>'
-        + '<div class="trailer-video" id="trailer-container"></div>'
-        + '</section></div>';
-    }
-
     root.innerHTML = html;
 
     wireDetailActions();
@@ -655,11 +663,6 @@
     if (type === "tv" && detailState.seasons && detailState.seasons.seasons) {
       wireSeasons();
       renderEpisodes(detailState.currentSeason);
-      // For TV: show a placeholder in the player area prompting episode selection.
-      showPlayerPlaceholder();
-    } else {
-      // For movies: auto-load the player.
-      loadInlinePlayer(detailState.detailPath, 0, 0);
     }
 
     // Lazy-render the trailer only when the trailer section scrolls into view.
@@ -678,13 +681,14 @@
       class: "btn btn-primary",
       html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Watch Now',
       onclick: function () {
-        var wrap = $("#inline-player-wrap");
-        if (wrap) {
-          wrap.scrollIntoView({ behavior: "smooth", block: "start" });
-          if (detailState.playerInstance && detailState.playerInstance.play) {
-            detailState.playerInstance.play();
-          }
+        // Open the player as a separate full-page view.
+        var url = "player.html?path=" + encodeURIComponent(detailState.detailPath);
+        if (type === "tv") {
+          var se = detailState.currentSeason || 1;
+          var ep = detailState.currentEpisode || 1;
+          url += "&season=" + se + "&episode=" + ep;
         }
+        window.location.href = url;
       }
     });
     var dlBtn = el("button", {
@@ -717,7 +721,6 @@
         renderEpisodes(detailState.currentSeason);
         var label = $("#episodes-season-label");
         if (label) label.textContent = "- Season " + detailState.currentSeason;
-        showPlayerPlaceholder();
       });
     });
   }
@@ -803,13 +806,10 @@
         var ep = parseInt(b.dataset.ep, 10);
         detailState.currentSeason = se;
         detailState.currentEpisode = ep;
-        // Reset subtitles when switching episodes.
-        detailState.captions = null;
-        detailState.activeCaption = null;
-        detailState.subtitleCues = null;
-        loadInlinePlayer(detailState.currentDubPath || detailState.detailPath, se, ep);
-        var wrap = $("#inline-player-wrap");
-        if (wrap) wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+        // Open the player as a separate full-page view.
+        var url = "player.html?path=" + encodeURIComponent(detailState.currentDubPath || detailState.detailPath)
+          + "&season=" + se + "&episode=" + ep;
+        window.location.href = url;
       });
     });
     $all(".ep-dl", list).forEach(function (b) {
@@ -821,23 +821,101 @@
     });
   }
 
-  // ---------- Inline player (custom controls) ----------
-  function showPlayerPlaceholder() {
-    var wrap = $("#inline-player-wrap");
-    if (!wrap) return;
-    var info = detailState.info || {};
-    var title = info.title || "Select an episode";
-    wrap.innerHTML = ''
-      + '<div class="vp" id="vp-root">'
-      +   '<div class="vp-placeholder">'
-      +     '<div class="vp-ph-title">' + escapeHtml(title) + '</div>'
-      +     '<div class="vp-ph-sub">Pick an episode from the list below to start watching. Use the player controls for quality, subtitles, and audio language.</div>'
-      +   '</div>'
-      + '</div>';
+  // ---------- Player page (separate full-page view) ----------
+  function initPlayer() {
+    var params = new URLSearchParams(window.location.search);
+    var path = params.get("path");
+    if (!path) {
+      $("#player-root").innerHTML = '<div class="container" style="padding:40px 12px"><div class="error-box">No title specified.</div></div>';
+      return;
+    }
+    var season = parseInt(params.get("season"), 10) || 0;
+    var episode = parseInt(params.get("episode"), 10) || 0;
+    // For TV shows without an episode, default to S1E1.
+    if (season && !episode) episode = 1;
+
+    detailState.detailPath = path;
+    detailState.currentDubPath = path;
+    detailState.currentSeason = season;
+    detailState.currentEpisode = episode;
+    initDownloadModal();
+    loadPlayerPage(path, season, episode);
   }
 
-  function loadInlinePlayer(detailPath, season, episode) {
-    var wrap = $("#inline-player-wrap");
+  function loadPlayerPage(path, season, episode) {
+    var root = $("#player-root");
+    root.innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+
+    Promise.all([
+      api("/api/details/" + encodeURIComponent(path)).catch(function (e) { return { __error: e.message }; }),
+      api("/api/seasons/" + encodeURIComponent(path)).catch(function (e) { return { __error: e.message }; }),
+    ]).then(function (results) {
+      var info = results[0];
+      var seasons = results[1];
+      if (info && info.__error && !info.title) {
+        root.innerHTML = '<div class="container" style="padding:40px 12px"><div class="error-box">Failed to load: ' + escapeHtml(info.__error) + '</div></div>';
+        return;
+      }
+      detailState.info = info;
+      detailState.seasons = (seasons && !seasons.__error) ? seasons : null;
+      renderPlayerPage(info, season, episode);
+    });
+  }
+
+  function renderPlayerPage(info, season, episode) {
+    var root = $("#player-root");
+    var type = info.type || (info.subjectType === 1 ? "movie" : "tv");
+    var genres = (info.genre || "").split(",").map(function (g) { return g.trim(); }).filter(Boolean);
+    var rating = info.imdbRatingValue ? parseFloat(info.imdbRatingValue).toFixed(1) : "N/A";
+    var year = String(info.releaseDate || "").slice(0, 4);
+
+    var html = ''
+      + '<div class="player-page">'
+      +   '<div class="player-video-wrap" id="player-video-wrap">'
+      +     '<div class="loading"><div class="spinner"></div>Fetching streams...</div>'
+      +   '</div>'
+      +   '<div class="container player-info-block">'
+      +     '<h1 class="player-page-title">' + escapeHtml(info.title || "Untitled") + '</h1>'
+      +     '<div class="detail-meta">'
+      +       '<span class="type-badge">' + (type === "tv" ? "TV Series" : "Movie") + '</span>'
+      +       (season ? '<span class="pill">S' + season + ' E' + episode + '</span>' : '')
+      +       '<span class="rating"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>' + rating + '</span>'
+      +       (year ? '<span class="pill">' + year + '</span>' : '')
+      +       (info.durationText ? '<span class="pill">' + escapeHtml(info.durationText) + '</span>' : '')
+      +       (info.countryName ? '<span class="pill">' + escapeHtml(info.countryName) + '</span>' : '')
+      +     '</div>'
+      +     (genres.length ? '<div class="detail-genres">' + genres.map(function (g) { return '<span class="genre-tag">' + escapeHtml(g) + '</span>'; }).join("") + '</div>' : '')
+      +     '<p class="detail-synopsis">' + escapeHtml(info.description || "No synopsis available.") + '</p>'
+      +     '<div class="detail-actions" id="player-actions"></div>'
+      +   '</div>'
+      + '</div>';
+
+    root.innerHTML = html;
+
+    // Wire up the Download / Back buttons.
+    var actions = $("#player-actions");
+    if (actions) {
+      var dlBtn = el("button", {
+        class: "btn btn-secondary",
+        html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download',
+        onclick: function () {
+          openDownloadModal(info.title, detailState.currentDubPath || detailState.detailPath, info.subjectId, season, episode);
+        }
+      });
+      var backBtn = el("a", {
+        class: "btn btn-ghost",
+        href: "detail.html?path=" + encodeURIComponent(detailState.detailPath),
+        html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back to details'
+      });
+      actions.appendChild(dlBtn);
+      actions.appendChild(backBtn);
+    }
+
+    // Load the stream into the player wrapper.
+    loadPlayerStream($("#player-video-wrap"), detailState.currentDubPath || detailState.detailPath, season, episode);
+  }
+
+  function loadPlayerStream(wrap, detailPath, season, episode) {
     if (!wrap) return;
     detailState.currentDubPath = detailPath;
     wrap.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching streams...</div>';
@@ -853,7 +931,7 @@
         return;
       }
       detailState.currentQuality = best;
-      buildInlinePlayer(wrap, best, season, episode);
+      buildPlayer(wrap, best, season, episode);
       // Pre-fetch captions in the background so the CC menu shows languages quickly.
       fetchCaptions(detailPath, season, episode).then(function () {
         if (detailState.playerInstance) detailState.playerInstance.refreshCaptions();
@@ -875,7 +953,7 @@
     });
   }
 
-  function buildInlinePlayer(wrap, quality, season, episode) {
+  function buildPlayer(wrap, quality, season, episode) {
     var info = detailState.info || {};
     var playSrc = streamProxyUrl(quality.url);
     var qualities = detailState.qualities || [];
@@ -901,12 +979,23 @@
       });
     });
 
+    // Player structure:
+    //   - video element
+    //   - subtitle overlay
+    //   - big center play button (visible when paused)
+    //   - loading spinner
+    //   - play/pause FAB (ALWAYS visible, bottom-left)
+    //   - hideable controls bar (progress, volume, time, CC, settings, fullscreen)
+    //   - settings menu (quality + audio) and CC menu (subtitles)
     wrap.innerHTML = ''
       + '<div class="vp" id="vp-root">'
       +   '<video id="vp-video" playsinline preload="metadata" src="' + escapeHtml(playSrc) + '"></video>'
       +   '<div class="vp-subs" id="vp-subs"></div>'
       +   '<button class="vp-big-play" id="vp-big-play" aria-label="Play"><svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>'
       +   '<div class="vp-loading" id="vp-loading"></div>'
+      // Always-visible play/pause button (separate from the hideable controls).
+      +   '<button class="vp-play-fab" id="vp-play-fab" aria-label="Play/Pause"><svg id="vp-fab-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>'
+      // Hideable controls bar. Tapping the video toggles this bar.
       +   '<div class="vp-controls" id="vp-controls">'
       +     '<div class="vp-progress" id="vp-progress">'
       +       '<div class="vp-progress-track">'
@@ -917,7 +1006,6 @@
       +       '<input type="range" class="vp-progress-input" id="vp-progress-input" min="0" max="1000" value="0" step="1" aria-label="Seek">'
       +     '</div>'
       +     '<div class="vp-controls-row">'
-      +       '<button class="vp-btn" id="vp-play" aria-label="Play/Pause"><svg id="vp-play-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>'
       +       '<div class="vp-volume-wrap">'
       +         '<button class="vp-btn" id="vp-mute" aria-label="Mute"><svg id="vp-mute-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/></svg></button>'
       +         '<div class="vp-volume-bar" id="vp-volume-bar"><div class="vp-volume-bar-fill" id="vp-volume-fill"></div></div>'
@@ -977,8 +1065,8 @@
     var root = $("#vp-root", wrap);
     var video = $("#vp-video", wrap);
     var bigPlay = $("#vp-big-play", wrap);
-    var playBtn = $("#vp-play", wrap);
-    var playIcon = $("#vp-play-icon", wrap);
+    var playFab = $("#vp-play-fab", wrap);
+    var playFabIcon = $("#vp-fab-icon", wrap);
     var muteBtn = $("#vp-mute", wrap);
     var muteIcon = $("#vp-mute-icon", wrap);
     var volumeBar = $("#vp-volume-bar", wrap);
@@ -1016,7 +1104,7 @@
     function setPlaying(isPlaying) {
       if (isPlaying) root.classList.add("vp-playing");
       else root.classList.remove("vp-playing");
-      playIcon.innerHTML = isPlaying ? PAUSE_SVG : PLAY_SVG;
+      playFabIcon.innerHTML = isPlaying ? PAUSE_SVG : PLAY_SVG;
       bigPlay.classList.toggle("hidden", isPlaying);
     }
     function formatTime(s) {
@@ -1165,9 +1253,9 @@
       muteIcon.innerHTML = (video.muted || video.volume === 0) ? VOL_MUTE_SVG : VOL_FULL_SVG;
     });
 
-    bigPlay.addEventListener("click", togglePlay);
-    playBtn.addEventListener("click", togglePlay);
-    fsBtn.addEventListener("click", toggleFullscreen);
+    bigPlay.addEventListener("click", function (e) { e.stopPropagation(); togglePlay(); });
+    playFab.addEventListener("click", function (e) { e.stopPropagation(); togglePlay(); });
+    fsBtn.addEventListener("click", function (e) { e.stopPropagation(); toggleFullscreen(); });
     ccBtn.addEventListener("click", function (e) { e.stopPropagation(); toggleMenu(menuCC); });
     settingsBtn.addEventListener("click", function (e) { e.stopPropagation(); toggleMenu(menuSettings); });
 
@@ -1361,18 +1449,42 @@
       else setVolume(0);
     });
 
-    // Idle / show controls on mouse move + touch.
+    // Idle / show controls on mouse move.
     root.addEventListener("mousemove", function () { setIdle(false); });
-    root.addEventListener("touchstart", function () { setIdle(false); }, { passive: true });
-    root.addEventListener("touchend", function () {
-      if (!video.paused) setIdle(false);
-    }, { passive: true });
 
-    // Click on the video toggles play (but not on controls or menus).
-    video.addEventListener("click", function (e) {
-      // Only toggle if the click was on the video itself (not on overlay controls).
-      if (e.target === video) togglePlay();
-    });
+    // TAP behavior: tapping the video toggles the control bar visibility
+    // (show/hide). It does NOT toggle play/pause. The play/pause FAB is
+    // always visible so the user can pause/resume at any time.
+    function onVideoTap(e) {
+      // Ignore taps that originate from controls, menus, or buttons.
+      if (e.target !== video) return;
+      e.preventDefault();
+      // Toggle the idle state (which shows/hides the hideable controls bar).
+      var willHide = !root.classList.contains("idle") && !video.paused;
+      setIdle(willHide);
+    }
+    video.addEventListener("click", onVideoTap);
+    // On touch devices, a touchend without movement triggers the tap.
+    var touchStartX = 0, touchStartY = 0, touchMoved = false;
+    video.addEventListener("touchstart", function (e) {
+      if (e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchMoved = false;
+      }
+    }, { passive: true });
+    video.addEventListener("touchmove", function (e) {
+      if (e.touches.length === 1) {
+        var dx = Math.abs(e.touches[0].clientX - touchStartX);
+        var dy = Math.abs(e.touches[0].clientY - touchStartY);
+        if (dx > 8 || dy > 8) touchMoved = true;
+      }
+    }, { passive: true });
+    video.addEventListener("touchend", function (e) {
+      if (!touchMoved && e.target === video) {
+        onVideoTap(e);
+      }
+    }, { passive: false });
 
     // Keyboard shortcuts (when player is in viewport).
     root.tabIndex = 0;
@@ -1462,37 +1574,105 @@
     modal.classList.add("open");
     document.body.style.overflow = "hidden";
 
-    var url = "/api/" + (season ? "tv" : "movie") + "/" + encodeURIComponent(detailPath);
-    if (season) url += "?season=" + season + "&episode=" + episode;
+    var streamUrl = "/api/" + (season ? "tv" : "movie") + "/" + encodeURIComponent(detailPath);
+    if (season) streamUrl += "?season=" + season + "&episode=" + episode;
 
-    api(url).then(function (data) {
+    // Fetch stream qualities and captions in parallel so we can show both
+    // the quality list and the subtitle download section.
+    var captionsPromise = api("/api/captions/" + encodeURIComponent(detailPath) + (season ? "?season=" + season + "&episode=" + episode : ""))
+      .then(function (d) { return d.captions || []; })
+      .catch(function () { return []; });
+
+    Promise.all([
+      api(streamUrl),
+      captionsPromise,
+    ]).then(function (results) {
+      var data = results[0];
+      var captions = results[1];
       var qualities = (data.qualities || []).filter(function (q) { return q.url; });
       if (qualities.length === 0) {
         body.innerHTML = '<div class="error-box">No downloadable streams found right now. Please try again in a moment.</div>';
         return;
       }
       qualities.sort(function (a, b) { return b.resolution - a.resolution; });
-      body.innerHTML = '<div class="download-list">' + qualities.map(function (q) {
+
+      // Build a poster backdrop header for the modal.
+      var cover = (detailState.info && detailState.info.cover) || "";
+      var html = ''
+        + '<div class="dl-modal-poster" style="background-image:url(\'' + escapeHtml(cover) + '\')">'
+        +   '<div class="dl-modal-poster-overlay"></div>'
+        +   '<div class="dl-modal-poster-title">' + escapeHtml(displayTitle) + '</div>'
+        + '</div>'
+        + '<div class="dl-modal-body">';
+
+      // Quality list with file sizes and generous spacing.
+      html += '<div class="dl-section-label">Video Quality</div>';
+      html += '<div class="download-list">';
+      qualities.forEach(function (q, idx) {
+        var sizeText = formatFileSize((q.size_mb || 0) * 1024 * 1024);
         if (q.vipLocked) {
-          return '<div class="download-row">'
+          html += ''
+            + '<div class="download-row">'
             +   '<div class="download-info">'
-            +     '<div class="download-res">' + q.resolution + 'P<span class="vip-tag">VIP</span></div>'
+            +     '<div class="download-res">' + q.resolution + 'P <span class="vip-tag">VIP</span></div>'
             +     '<div class="download-meta">VIP only</div>'
             +   '</div>'
             +   '<span class="btn btn-ghost btn-sm" style="cursor:not-allowed;opacity:.5">VIP</span>'
             + '</div>';
+          return;
         }
         var filename = buildDownloadFilename(title, q.resolution, season, episode);
-        var dlHref = downloadProxyUrl(q.url, filename);
-        return ''
+        var dlUrl = downloadProxyUrl(q.url, filename);
+        html += ''
           + '<div class="download-row">'
           +   '<div class="download-info">'
           +     '<div class="download-res">' + q.resolution + 'P</div>'
-          +     '<div class="download-meta">' + escapeHtml(filename) + '</div>'
+          +     '<div class="download-meta">' + (sizeText ? escapeHtml(sizeText) : "Download") + '</div>'
           +   '</div>'
-          +   '<a class="btn btn-primary btn-sm" href="' + escapeHtml(dlHref) + '" download="' + escapeHtml(filename) + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</a>'
+          // Use a button with onclick (not an <a href>) so the URL cannot be
+          // long-pressed or right-clicked to reveal the download link.
+          +   '<button class="btn btn-primary btn-sm dl-trigger" data-url="' + escapeHtml(dlUrl) + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</button>'
           + '</div>';
-      }).join("") + '</div>';
+      });
+      html += '</div>';
+
+      // Subtitles section (if any caption URLs are available).
+      if (captions && captions.length) {
+        html += '<div class="dl-section-label" style="margin-top:24px">Subtitles</div>';
+        html += '<div class="download-list">';
+        captions.forEach(function (c) {
+          var lanName = c.lanName || c.lan || "Subtitle";
+          var subUrl = streamProxyUrl(c.url);
+          var subFilename = safeName(title) + (season ? "_" + seTag(season, episode) : "") + "_" + safeName(lanName) + ".srt";
+          var dlUrl = downloadProxyUrl(c.url, subFilename);
+          html += ''
+            + '<div class="download-row">'
+            +   '<div class="download-info">'
+            +     '<div class="download-res">' + escapeHtml(lanName) + '</div>'
+            +     '<div class="download-meta">.srt subtitle file</div>'
+            +   '</div>'
+            +   '<button class="btn btn-secondary btn-sm dl-trigger" data-url="' + escapeHtml(dlUrl) + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> Download</button>'
+            + '</div>';
+        });
+        html += '</div>';
+      }
+
+      html += '</div>'; // close dl-modal-body
+      body.innerHTML = html;
+
+      // Wire up download triggers. Using window.location.href triggers the
+      // browser download (Content-Disposition: attachment) without exposing
+      // the URL via a long-pressable <a href> element.
+      $all(".dl-trigger", body).forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var u = btn.getAttribute("data-url");
+          if (!u) return;
+          window.location.href = u;
+          toast("Download started", "success");
+        });
+        // Prevent context menu (right-click) on download buttons.
+        btn.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+      });
     }).catch(function (e) {
       body.innerHTML = '<div class="error-box">Failed to load download links: ' + escapeHtml(e.message) + '</div>';
     });
@@ -1513,6 +1693,7 @@
     if (page === "home") initHome();
     else if (page === "search") initSearch();
     else if (page === "detail") initDetail();
+    else if (page === "player") initPlayer();
   });
 
   window.MovieBox = { api: api, toast: toast };

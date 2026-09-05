@@ -189,12 +189,12 @@ main { flex: 1 0 auto; }
 .hero-content {
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  padding: 12px;
+  padding: 12px 12px 34px;
   z-index: 2;
   max-width: 640px;
 }
 @media (min-width: 768px) {
-  .hero-content { padding: 32px; }
+  .hero-content { padding: 32px 32px 40px; }
 }
 .hero-title {
   font-size: 20px;
@@ -249,35 +249,36 @@ main { flex: 1 0 auto; }
 
 .hero-dots {
   position: absolute;
-  bottom: 10px; left: 0; right: 0;
-  z-index: 3;
-  display: flex; gap: 8px;
+  bottom: 4px; left: 0; right: 0;
+  z-index: 4;
+  display: flex; gap: 6px;
   justify-content: center;
-  padding: 8px 0;
+  padding: 0;
+  pointer-events: none;
 }
 .hero-dot {
-  width: 8px; height: 8px;
+  width: 6px; height: 6px;
   border-radius: 50%;
-  background: rgba(255,255,255,0.5);
-  transition: background .15s, transform .15s, width .15s;
+  background: rgba(255,255,255,0.45);
+  transition: background .15s, width .15s;
   cursor: pointer;
   padding: 0;
   border: none;
   flex-shrink: 0;
-  min-width: 8px;
-  min-height: 8px;
+  min-width: 6px;
+  min-height: 6px;
+  pointer-events: auto;
 }
 @media (min-width: 768px) {
   .hero-dots {
-    bottom: 16px; right: 24px; left: auto;
-    justify-content: flex-start;
-    padding: 0;
+    bottom: 6px;
+    gap: 8px;
   }
-  .hero-dot { width: 10px; height: 10px; min-width: 10px; min-height: 10px; }
+  .hero-dot { width: 8px; height: 8px; min-width: 8px; min-height: 8px; }
 }
-.hero-dot.active { background: var(--accent); width: 22px; border-radius: 4px; }
+.hero-dot.active { background: var(--accent); width: 16px; border-radius: 4px; }
 @media (min-width: 768px) {
-  .hero-dot.active { width: 28px; }
+  .hero-dot.active { width: 20px; }
 }
 
 /* ---------- Buttons ---------- */
@@ -1260,6 +1261,30 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
   .vp-big-play { width: 60px; height: 60px; }
 }
 
+/* Always-visible play/pause button (separate from the hideable controls bar).
+   Tapping the video toggles the controls bar but this button stays visible
+   so the user can always pause/resume. */
+.vp-play-fab {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: grid; place-items: center;
+  color: #fff;
+  cursor: pointer;
+  z-index: 6;
+  transition: background .15s, transform .1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.vp-play-fab:hover { background: rgba(0, 0, 0, 0.75); }
+.vp-play-fab:active { transform: scale(0.94); }
+@media (max-width: 767px) {
+  .vp-play-fab { width: 40px; height: 40px; bottom: 8px; left: 8px; }
+}
+
 /* Subtitle overlay (rendered from parsed SRT) */
 .vp-subs {
   position: absolute;
@@ -1628,3 +1653,99 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
 
 /* Make download buttons in modal simpler (no copy-url button now) */
 .download-row .download-info { min-width: 0; flex: 1; }
+
+/* =========================================================
+   Player page (separate full-page view)
+   ========================================================= */
+.player-header { background: #000; }
+.player-page {
+  background: #000;
+}
+.player-video-wrap {
+  width: 100%;
+  background: #000;
+  position: relative;
+}
+.player-video-wrap .vp {
+  aspect-ratio: 16 / 9;
+  max-height: 70vh;
+}
+@media (min-width: 768px) {
+  .player-video-wrap .vp {
+    max-height: 80vh;
+  }
+}
+.player-info-block {
+  background: var(--bg);
+  padding: 20px 12px 32px;
+}
+@media (min-width: 768px) {
+  .player-info-block { padding: 28px 0 48px; }
+}
+.player-page-title {
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 10px;
+  letter-spacing: -0.5px;
+}
+@media (min-width: 768px) {
+  .player-page-title { font-size: 32px; margin-bottom: 14px; }
+}
+
+/* =========================================================
+   Download modal redesign (poster backdrop + quality list)
+   ========================================================= */
+#download-modal .modal-content {
+  max-width: 520px;
+  padding: 0;
+  overflow: hidden;
+}
+.dl-modal-poster {
+  position: relative;
+  width: 100%;
+  height: 160px;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+}
+.dl-modal-poster-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--bg-elev) 0%, rgba(24,24,24,0.3) 60%, rgba(24,24,24,0.55) 100%);
+}
+.dl-modal-poster-title {
+  position: absolute;
+  left: 0; right: 0; bottom: 12px;
+  padding: 0 18px;
+  font-size: 17px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  z-index: 1;
+}
+.dl-modal-body {
+  padding: 16px 18px 20px;
+}
+@media (min-width: 768px) {
+  .dl-modal-poster { height: 180px; }
+  .dl-modal-body { padding: 20px 22px 24px; }
+}
+.dl-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.download-list { gap: 12px; }
+.download-row {
+  padding: 14px 16px;
+}
+@media (min-width: 768px) {
+  .download-list { gap: 14px; }
+  .download-row { padding: 16px 18px; }
+}
+.download-res { font-size: 15px; }
+.download-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+

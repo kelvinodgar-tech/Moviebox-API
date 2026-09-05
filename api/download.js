@@ -1,5 +1,10 @@
 // GET /api/download?url=<mp4-url>&filename=Movie.mp4
 // Edge Runtime download proxy. Same as stream but sets Content-Disposition.
+//
+// The Edge Runtime tends to strip Content-Length when the body is a
+// ReadableStream, which makes browsers show "25/?" during downloads. To fix
+// this we do a HEAD request first to read the total file size, then stream
+// the GET response with an explicit Content-Length header.
 
 export const config = {
   runtime: 'edge',
@@ -20,15 +25,20 @@ function sanitizeFilename(name) {
   return (name || "video.mp4").replace(/[^\w.\- ]/g, "").substring(0, 100) || "video.mp4";
 }
 
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Range",
+    "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition",
+  };
+}
+
 export default async function handler(req) {
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Range",
-      },
+      headers: corsHeaders(),
     });
   }
 
@@ -74,6 +84,23 @@ export default async function handler(req) {
       upstreamHeaders["Range"] = req.headers.get("range");
     }
 
+    // Fire a HEAD request to learn the total file size. Many CDNs do not
+    // return Content-Length on the streaming GET response (they use chunked
+    // encoding), which makes the browser display "25/?" during downloads.
+    let totalSize = null;
+    try {
+      const headResp = await fetch(targetUrl, {
+        method: "HEAD",
+        headers: upstreamHeaders,
+        redirect: "follow",
+        signal: AbortSignal.timeout(8000),
+      });
+      const cl = headResp.headers.get("content-length");
+      if (cl && /^\d+$/.test(cl)) totalSize = cl;
+    } catch {
+      // HEAD failed; we'll fall back to the GET response's content-length.
+    }
+
     const upstream = await fetch(targetUrl, {
       headers: upstreamHeaders,
       redirect: "follow",
@@ -81,12 +108,36 @@ export default async function handler(req) {
 
     const respHeaders = new Headers();
     respHeaders.set("Access-Control-Allow-Origin", "*");
+    respHeaders.set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Disposition");
     respHeaders.set("Content-Disposition", `attachment; filename="${filename}"`);
-    
-    const forward = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"];
+
+    // Forward useful headers from the upstream GET response.
+    const forward = ["content-type", "content-range", "accept-ranges", "etag", "last-modified"];
     for (const h of forward) {
       const v = upstream.headers.get(h);
       if (v) respHeaders.set(h, v);
+    }
+
+    // Resolve the Content-Length. Prefer the HEAD value (full file size) when
+    // there is no Range request, because the Edge Runtime drops the header on
+    // streamed bodies. For Range requests the GET Content-Length is the chunk
+    // size and Content-Range carries the total, so keep it as-is.
+    const getContentLength = upstream.headers.get("content-length");
+    const hasRange = !!req.headers.get("range");
+    let contentLength = null;
+    if (hasRange) {
+      contentLength = getContentLength;
+    } else if (totalSize) {
+      contentLength = totalSize;
+    } else {
+      contentLength = getContentLength;
+    }
+    if (contentLength && /^\d+$/.test(contentLength)) {
+      respHeaders.set("Content-Length", contentLength);
+    }
+    // Always advertise range support so browsers can resume failed downloads.
+    if (!respHeaders.get("accept-ranges")) {
+      respHeaders.set("Accept-Ranges", "bytes");
     }
 
     return new Response(upstream.body, {

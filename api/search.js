@@ -111,6 +111,9 @@ export default async function handler(req, res) {
   const results = [];
   const errors = [];
 
+  // netnaija.film is listed first so its result ordering is preserved as the
+  // canonical order. The other two sites share the same backend and are only
+  // used to backfill any results netnaija might have missed.
   const sites = [
     { name: "netnaija", url: `https://netnaija.film/search-result?keyword=${encoded}` },
     { name: "officialmoviebox", url: `https://officialmoviebox.com/newWeb/searchResult?keyword=${encoded}` },
@@ -133,6 +136,8 @@ export default async function handler(req, res) {
     return { site: site.name, subjects };
   }));
 
+  // Preserve the source order. netnaija.film results come first (in the exact
+  // order they appear on the page), then any backfill from the other sites.
   for (const r of responses) {
     if (r.status === "fulfilled" && r.value.subjects.length > 0) {
       for (const s of r.value.subjects) {
@@ -146,32 +151,8 @@ export default async function handler(req, res) {
     }
   }
 
-  // Rank by relevance:
-  //   1. Exact title match (case-insensitive)
-  //   2. Starts-with match
-  //   3. Contains match (query as substring of title)
-  //   4. Partial / fuzzy match (every query token appears in title, in any order)
-  // Within the same tier, keep IMDB rating as a secondary sort so the better
-  // title wins ties.
-  const qLower = q.toLowerCase();
-  const qTokens = qLower.split(/\s+/).filter(Boolean);
-
-  function rank(s) {
-    const t = String(s.title || "").toLowerCase();
-    if (t === qLower) return 0;                       // exact
-    if (t.startsWith(qLower)) return 1;               // starts with
-    if (t.includes(qLower)) return 2;                 // contains
-    if (qTokens.length > 1 && qTokens.every(tok => t.includes(tok))) return 3; // partial
-    return 4;                                         // fuzzy / other
-  }
-  results.sort((a, b) => {
-    const ra = rank(a);
-    const rb = rank(b);
-    if (ra !== rb) return ra - rb;
-    const ia = parseFloat(a.imdbRating) || 0;
-    const ib = parseFloat(b.imdbRating) || 0;
-    return ib - ia;
-  });
+  // No relevance re-sorting. The source site already ranks results and we
+  // return them in the order they were scraped.
 
   res.status(200).json({
     query: q,

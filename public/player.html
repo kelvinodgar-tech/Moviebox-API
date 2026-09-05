@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Details - MovieBox</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Player - MovieBox</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2310b84d'/><path d='M12 9v14l11-7z' fill='white'/></svg>">
   <link rel="stylesheet" href="css/style.css">
 </head>
-<body data-page="detail">
-  <header class="site-header">
+<body data-page="player">
+  <header class="site-header player-header">
     <div class="container">
       <a class="logo" href="index.html">
         <span class="logo-mark">M</span>
@@ -25,21 +25,8 @@
   </header>
 
   <main>
-    <div id="detail-root"></div>
+    <div id="player-root"></div>
   </main>
-
-  <footer class="site-footer">
-    <div class="container">
-      <div class="logo">
-        <span class="logo-mark">M</span>
-        <span class="logo-text">Movie<span>Box</span></span>
-      </div>
-      <div class="footer-links">
-        <a href="index.html">Home</a>
-      </div>
-      <div>Built on the <a href="https://github.com/kelvinodgar-tech/Moviebox-API" target="_blank" rel="noopener">MovieBox API</a>. For educational purposes only.</div>
-    </div>
-  </footer>
 
   <!-- Download modal (used to pick a quality before downloading) -->
   <div id="download-modal" class="modal" role="dialog" aria-modal="true" aria-label="Download options">
@@ -53,6 +40,19 @@
       <div id="download-body" class="modal-body"></div>
     </div>
   </div>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="logo">
+        <span class="logo-mark">M</span>
+        <span class="logo-text">Movie<span>Box</span></span>
+      </div>
+      <div class="footer-links">
+        <a href="index.html">Home</a>
+      </div>
+      <div>Built on the <a href="https://github.com/kelvinodgar-tech/Moviebox-API" target="_blank" rel="noopener">MovieBox API</a>. For educational purposes only.</div>
+    </div>
+  </footer>
 
   <script src="js/app.js"></script>
 </body>
