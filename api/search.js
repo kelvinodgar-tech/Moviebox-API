@@ -14,6 +14,9 @@ export default async function handler(req, res) {
   }
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    
     const resp = await fetch(`${API}/wefeed-h5api-bff/home?host=netnaija.film`, {
       headers: {
         "User-Agent": UA,
@@ -22,10 +25,18 @@ export default async function handler(req, res) {
         "Origin": "https://netnaija.film",
         "Referer": "https://netnaija.film/",
       },
+      signal: controller.signal,
     });
-    const data = await resp.json();
+    clearTimeout(timeout);
+    
+    const text = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return res.status(502).json({ error: "Failed to parse home response", q });
+    }
 
-    // Walk the home response and find all unique subjects
     const seen = new Set();
     const results = [];
     function walk(o) {
@@ -55,6 +66,10 @@ export default async function handler(req, res) {
       results: results.slice(0, limit),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    if (e.name === "AbortError") {
+      res.status(504).json({ error: "Home page fetch timed out. Try again.", q });
+    } else {
+      res.status(500).json({ error: e.message, q });
+    }
   }
 }
