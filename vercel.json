@@ -3,7 +3,10 @@
   "framework": null,
   "rewrites": [
     { "source": "/api/movie/:detailPath", "destination": "/api/movie?detailPath=:detailPath" },
-    { "source": "/api/tv/:detailPath", "destination": "/api/tv?detailPath=:detailPath" }
+    { "source": "/api/tv/:detailPath", "destination": "/api/tv?detailPath=:detailPath" },
+    { "source": "/api/details/:detailPath", "destination": "/api/details?detailPath=:detailPath" },
+    { "source": "/api/seasons/:detailPath", "destination": "/api/seasons?detailPath=:detailPath" },
+    { "source": "/api/captions/:detailPath", "destination": "/api/captions?detailPath=:detailPath" }
   ],
   "headers": [
     {
@@ -19,7 +22,8 @@
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" },
+        { "key": "Cache-Control", "value": "public, max-age=60, s-maxage=120" }
       ]
     }
   ]
