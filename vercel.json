@@ -1,0 +1,26 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "rewrites": [
+    { "source": "/api/movie/:detailPath", "destination": "/api/movie?detailPath=:detailPath" },
+    { "source": "/api/tv/:detailPath", "destination": "/api/tv?detailPath=:detailPath" }
+  ],
+  "headers": [
+    {
+      "source": "/moviebox_scraper.py",
+      "headers": [
+        { "key": "Content-Type", "value": "text/x-python" },
+        { "key": "Content-Disposition", "value": "attachment; filename=\"moviebox_scraper.py\"" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    }
+  ]
+}

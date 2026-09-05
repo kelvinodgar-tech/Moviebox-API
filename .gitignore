@@ -1,4 +1,4 @@
 __pycache__/
 *.pyc
-*.json
+moviebox_urls.json
 .DS_Store
