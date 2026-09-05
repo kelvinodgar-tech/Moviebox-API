@@ -6,9 +6,8 @@
 (function () {
   "use strict";
 
-  // Resolve API base. On Vercel the site and API share the same origin,
-  // so relative "/api/..." works. For local file:// testing, allow override.
   var API_BASE = window.MOVIEBOX_API_BASE || "";
+  var MAX_CARDS_PER_SECTION = 20;
 
   // ---------- Small utilities ----------
   function $(sel, root) { return (root || document).querySelector(sel); }
@@ -39,22 +38,12 @@
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
-  function fmtDuration(sec) {
-    sec = parseInt(sec) || 0;
-    if (!sec) return "";
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-    if (h > 0) return h + "h " + m + "m";
-    return m + "m";
-  }
   function api(path) {
     return fetch(API_BASE + path).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     });
   }
-  // Build a proxied media URL. The CDN (bcdnxw.hakunaymatata.com) requires a
-  // Referer header and returns 429 without it, so a browser <video> tag cannot
-  // play the raw MP4. /api/stream adds the header server-side.
   function streamProxyUrl(mediaUrl) {
     if (!mediaUrl) return "";
     var base = API_BASE || "";
@@ -76,9 +65,9 @@
   }
 
   // ---------- Card rendering ----------
-  function posterFallback() {
-    return '<div class="card-poster-fallback">No cover</div>';
-  }
+  // The fallback div is always present in the DOM (behind the img). When the
+  // img fails to load, we just hide it - the fallback shows through. This
+  // avoids any string concatenation in the onerror handler.
   function ratingStar(rating) {
     if (!rating) return "";
     return '<span class="card-rating"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>'
@@ -106,9 +95,10 @@
     return ''
       + '<a class="card" href="detail.html?path=' + dp + '">'
       +   '<div class="card-poster">'
+      +     '<div class="card-poster-fallback">No cover</div>'
       +     (cover
-          ? '<img loading="lazy" decoding="async" src="' + escapeHtml(cover) + '" alt="' + title + '" onerror="this.style.display=\'none\';this.parentElement.innerHTML+=\'' + posterFallback().replace(/'/g, "\\'") + '\'">'
-          : posterFallback())
+          ? '<img loading="lazy" decoding="async" src="' + escapeHtml(cover) + '" alt="' + title + '" onerror="this.style.display=\'none\'">'
+          : '')
       +     ratingStar(rating)
       +     typeBadge(type)
       +     '<div class="card-play"><div class="card-play-btn"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div></div>'
@@ -135,7 +125,15 @@
         + '<div>No titles found.</div></div>';
       return;
     }
-    container.innerHTML = items.map(cardHTML).join("");
+    container.innerHTML = items.slice(0, MAX_CARDS_PER_SECTION).map(cardHTML).join("");
+  }
+  // Render a horizontal scrolling row of cards (Netflix-style).
+  function renderRow(container, items) {
+    if (!items || items.length === 0) {
+      container.innerHTML = '<div class="empty-state">No titles found.</div>';
+      return;
+    }
+    container.innerHTML = items.slice(0, MAX_CARDS_PER_SECTION).map(cardHTML).join("");
   }
 
   // ---------- Header search wiring ----------
@@ -144,7 +142,6 @@
     if (!input) return;
     var form = input.closest("form") || input.parentElement;
 
-    // Autocomplete dropdown (debounced, calls /api/search-suggest via our API).
     var dropdown = el("div", { class: "suggest-dropdown", style: "display:none" });
     input.parentNode.appendChild(dropdown);
     var suggestTimer = null;
@@ -163,8 +160,6 @@
       lastQ = q;
       clearTimeout(suggestTimer);
       suggestTimer = setTimeout(function () {
-        // /api/search returns suggestions in its response; we use the small
-        // ?limit=1 variant to keep the payload tiny.
         fetch(API_BASE + "/api/search?q=" + encodeURIComponent(q) + "&limit=1")
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) { if (d && d.suggestions) showSuggestions(d.suggestions); })
@@ -172,7 +167,6 @@
       }, 220);
     });
     input.addEventListener("blur", function () {
-      // Delay so a click on an item registers first.
       setTimeout(function () { dropdown.style.display = "none"; }, 150);
     });
     input.addEventListener("focus", function () {
@@ -191,7 +185,6 @@
         if (e.key === "Enter") submit(e);
       });
     }
-    // Prefill on search page
     var params = new URLSearchParams(window.location.search);
     var q = params.get("q");
     if (q && document.body.dataset.page === "search") input.value = q;
@@ -213,7 +206,6 @@
         $("#hero").style.display = "none";
         return;
       }
-      // Preload the first hero image so it paints immediately.
       (function () {
         var first = heroItems[0];
         var img = (first && (first.bannerImage || first.cover)) || "";
@@ -271,36 +263,35 @@
       heroTimer = setInterval(function () { goHero(heroIdx + 1); }, 6000);
     }
 
+    // Each section is a horizontal scrolling row (Netflix-style carousel).
+    function sectionHTML(s, lazy) {
+      var items = (s.items || []).slice(0, MAX_CARDS_PER_SECTION);
+      return ''
+        + '<section class="section row-section' + (lazy ? " lazy-section" : "") + '">'
+        +   '<div class="section-head">'
+        +     '<h3 class="section-title">' + escapeHtml(s.title) + '</h3>'
+        +     '<span class="row-hint">Swipe &rarr;</span>'
+        +   '</div>'
+        +   '<div class="row-scroll">' + items.map(cardHTML).join("") + '</div>'
+        + '</section>';
+    }
+
     function renderSections(sections) {
       var valid = sections.filter(function (s) { return s.items && s.items.length; });
       if (!valid.length) {
         sectionsWrap.innerHTML = '';
         return;
       }
-      // Mobile performance: only render the first INITIAL_SECTIONS up front.
-      // The rest are rendered lazily when a sentinel scrolls into view.
       var isMobile = window.matchMedia("(max-width: 767px)").matches;
       var INITIAL_SECTIONS = isMobile ? 5 : valid.length;
       var queued = valid.slice(INITIAL_SECTIONS);
-
-      function sectionHTML(s, lazy) {
-        return ''
-          + '<section class="section' + (lazy ? " lazy-section" : "") + '">'
-          +   '<div class="section-head"><h3 class="section-title">' + escapeHtml(s.title) + '</h3></div>'
-          +   '<div class="grid">' + s.items.map(cardHTML).join("") + '</div>'
-          + '</section>';
-      }
 
       sectionsWrap.innerHTML = valid.slice(0, INITIAL_SECTIONS).map(function (s) {
         return sectionHTML(s, false);
       }).join("");
 
-      // No queue -> done.
       if (!queued.length) return;
 
-      // Add a sentinel + a "Load more" button (the button is a fallback for
-      // browsers without IntersectionObserver, and for users who prefer to
-      // control loading).
       var sentinel = el("div", { class: "load-more-sentinel", id: "sections-sentinel" });
       var btn = el("button", {
         class: "btn btn-ghost btn-sm",
@@ -315,7 +306,6 @@
         if (loading || !queued.length) return;
         loading = true;
         btn.textContent = "Loading...";
-        // Defer to next frame so the spinner can paint.
         requestAnimationFrame(function () {
           var batch = queued.splice(0, 3);
           var frag = document.createDocumentFragment();
@@ -324,7 +314,6 @@
             while (wrap.firstChild) frag.appendChild(wrap.firstChild);
           });
           sectionsWrap.insertBefore(frag, sentinel);
-          // Reveal lazily-rendered sections.
           requestAnimationFrame(function () {
             $all(".lazy-section", sectionsWrap).forEach(function (node) {
               node.classList.add("shown");
@@ -340,7 +329,6 @@
         });
       }
 
-      // Auto-load when the sentinel scrolls into view.
       if ("IntersectionObserver" in window) {
         var io = new IntersectionObserver(function (entries) {
           entries.forEach(function (e) {
@@ -351,15 +339,14 @@
       }
     }
 
-    // Load trending
-    trendingGrid.innerHTML = skeletonCards(10);
+    // Trending is now a horizontal row too.
+    trendingGrid.innerHTML = skeletonCards(8);
     api("/api/trending?limit=20").then(function (data) {
-      renderGrid(trendingGrid, data.items || []);
+      renderRow(trendingGrid, data.items || []);
     }).catch(function (e) {
-      trendingGrid.innerHTML = '<div class="error-box" style="grid-column:1/-1">Failed to load trending: ' + escapeHtml(e.message) + '</div>';
+      trendingGrid.innerHTML = '<div class="error-box">Failed to load trending: ' + escapeHtml(e.message) + '</div>';
     });
 
-    // Load home content (banners + sections)
     api("/api/home").then(function (data) {
       renderHero(data.banners || []);
       renderSections(data.sections || []);
@@ -369,7 +356,7 @@
   }
 
   // ---------- Page: search ----------
-  var searchState = { q: "", page: 1, limit: 20, total: 0, loading: false };
+  var searchState = { q: "", limit: 50, total: 0, loading: false };
 
   function initSearch() {
     var grid = $("#results-grid");
@@ -383,7 +370,6 @@
       return;
     }
     searchState.q = q;
-    searchState.page = 1;
     searchState.total = 0;
     titleEl.innerHTML = 'Results for <span style="color:var(--accent)">' + escapeHtml(q) + '</span>';
     grid.innerHTML = skeletonCards(12);
@@ -395,21 +381,18 @@
     searchState.loading = true;
     var grid = $("#results-grid");
     var titleEl = $("#results-title");
-    var suggestEl = $("#search-suggestions");
-    var isFirst = searchState.page === 1;
-    if (isFirst) grid.innerHTML = skeletonCards(12);
 
     var url = "/api/search?q=" + encodeURIComponent(searchState.q)
-      + "&limit=" + searchState.limit + "&page=" + searchState.page;
+      + "&limit=" + searchState.limit;
     api(url).then(function (data) {
       searchState.total = data.total || 0;
       var results = data.results || [];
       var suggestions = data.suggestions || [];
 
       titleEl.innerHTML = 'Results for <span style="color:var(--accent)">' + escapeHtml(searchState.q) + '</span>'
-        + ' <span class="text-muted">(' + searchState.total + ' found' + (data.sources ? '; home ' + (data.sources.home||0) + ' + trending ' + (data.sources.trending||0) : '') + ')</span>';
+        + ' <span class="text-muted">(' + searchState.total + ' found)</span>';
 
-      // Suggestions (autocomplete from the backend).
+      var suggestEl = $("#search-suggestions");
       if (suggestEl) {
         if (suggestions.length) {
           suggestEl.style.display = "";
@@ -423,32 +406,10 @@
         }
       }
 
-      if (isFirst) {
-        renderGrid(grid, results);
-      } else {
-        // Append to existing grid.
-        if (results.length) grid.insertAdjacentHTML("beforeend", results.map(cardHTML).join(""));
-      }
+      renderGrid(grid, results);
 
-      // "Load more" button.
-      var existing = $("#search-load-more");
-      if (existing) existing.parentNode.removeChild(existing);
-      if (data.hasMore && results.length) {
-        var wrap = el("div", { id: "search-load-more", style: "grid-column:1/-1;display:flex;justify-content:center;padding:20px 0" });
-        var btn = el("button", {
-          class: "btn btn-ghost",
-          text: "Load more (" + (searchState.total - (searchState.page * searchState.limit)) + " left)",
-          onclick: function () {
-            searchState.page++;
-            loadSearchPage();
-          }
-        });
-        wrap.appendChild(btn);
-        grid.appendChild(wrap);
-      }
-
-      if (isFirst && results.length === 0) {
-        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 21l-4.35-4.35M11 19a8 8 0 110-16 8 8 0 010 16z"/></svg><div>No titles found for " ' + escapeHtml(searchState.q) + ' ". Try a different keyword.</div></div>';
+      if (results.length === 0) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 21l-4.35-4.35M11 19a8 8 0 110-16 8 8 0 010 16z"/></svg><div>No titles found for "' + escapeHtml(searchState.q) + '". Try a different keyword.</div></div>';
       }
       searchState.loading = false;
     }).catch(function (e) {
@@ -507,21 +468,26 @@
     var rating = info.imdbRatingValue ? parseFloat(info.imdbRatingValue).toFixed(1) : "N/A";
     var year = (info.releaseDate || "").slice(0, 4);
 
+    var dubs = (info.dubs || []).filter(function (d) { return d.kind === "dub"; });
+    var subTracks = (info.dubs || []).filter(function (d) { return d.kind === "subtitle"; });
+    var subtitleList = (info.subtitles || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+
     var facts = [];
     if (year) facts.push(["Release", year]);
     if (info.durationText) facts.push(["Duration", info.durationText]);
     if (info.countryName) facts.push(["Country", info.countryName]);
     if (info.imdbRatingCount) facts.push(["IMDB Votes", Number(info.imdbRatingCount).toLocaleString()]);
-    if (info.subtitles) facts.push(["Subtitles", info.subtitles.split(",").slice(0, 4).join(", ") + (info.subtitles.split(",").length > 4 ? "..." : "")]);
     if (info.castCount != null) facts.push(["Cast", info.castCount + " people"]);
 
+    // Detail hero - stacked vertically on mobile, side-by-side on desktop.
     var html = ''
       + '<div class="detail-hero">'
       +   '<div class="detail-backdrop" style="background-image:url(\'' + escapeHtml(info.cover || "") + '\')"></div>'
       +   '<div class="container">'
       +     '<div class="detail-grid">'
       +       '<div class="detail-poster">'
-      +         (info.cover ? '<img loading="lazy" decoding="async" src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title) + '">' : posterFallback())
+      +         '<div class="card-poster-fallback">No cover</div>'
+      +         (info.cover ? '<img loading="lazy" decoding="async" src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title) + '" onerror="this.style.display=\'none\'">' : '')
       +       '</div>'
       +       '<div class="detail-info">'
       +         '<h1>' + escapeHtml(info.title || "Untitled") + '</h1>'
@@ -534,34 +500,52 @@
       +         '</div>'
       +         (genres.length ? '<div class="detail-genres">' + genres.map(function (g) { return '<span class="genre-tag">' + escapeHtml(g) + '</span>'; }).join("") + '</div>' : '')
       +         '<p class="detail-synopsis">' + escapeHtml(info.description || "No synopsis available.") + '</p>'
-      +         (facts.length ? '<div class="detail-facts">' + facts.map(function (f) {
-              return '<div class="fact"><span class="fact-label">' + escapeHtml(f[0]) + '</span><span class="fact-value">' + escapeHtml(f[1]) + '</span></div>';
-            }).join("") + '</div>' : '')
       +         '<div class="detail-actions" id="detail-actions"></div>'
       +       '</div>'
       +     '</div>'
       +   '</div>'
       + '</div>';
 
-    // TV: seasons + episodes
-    if (type === "tv" && detailState.seasons && detailState.seasons.seasons && detailState.seasons.seasons.length) {
-      detailState.currentSeason = detailState.seasons.seasons[0].season;
-      html += '<div class="container">'
-        + '<section class="section">'
-        +   '<div class="section-head"><h3 class="section-title">Episodes <span class="accent">- Season ' + detailState.currentSeason + '</span></h3></div>'
-        +   '<div class="season-bar" id="season-bar"></div>'
-        +   '<div class="episode-list" id="episode-list"></div>'
-        + '</section>';
-    } else if (type === "tv") {
-      html += '<div class="container"><section class="section"><div class="empty-state">No season information available for this title.</div></section>';
+    // Languages section (audio dubs + subtitles).
+    if (dubs.length || subTracks.length || subtitleList.length) {
+      html += '<div class="container"><section class="section detail-block">'
+        + '<div class="section-head"><h3 class="section-title">Languages</h3></div>'
+        + '<div class="lang-section">';
+      if (dubs.length) {
+        html += '<div class="lang-group"><span class="lang-label">Audio (Dubs):</span>'
+          + '<div class="lang-chips">' + dubs.map(function (d) {
+              var cls = d.original ? 'lang-chip active' : 'lang-chip';
+              var tag = d.original ? ' <span class="lang-orig">Original</span>' : '';
+              return '<a class="' + cls + '"' + (d.detailPath ? ' href="detail.html?path=' + escapeHtml(d.detailPath) + '"' : '') + '>' + escapeHtml(d.lanName || d.lanCode) + tag + '</a>';
+            }).join("") + '</div></div>';
+      }
+      var subs = subTracks.length
+        ? subTracks.map(function (d) { return escapeHtml(d.lanName || d.lanCode); })
+        : subtitleList;
+      if (subs.length) {
+        html += '<div class="lang-group"><span class="lang-label">Subtitles:</span>'
+          + '<div class="lang-chips">' + subs.map(function (s) {
+              return '<span class="lang-chip">' + escapeHtml(s) + '</span>';
+            }).join("") + '</div></div>';
+      }
+      html += '</div></section></div>';
     }
 
-    // Cast
+    // Facts section.
+    if (facts.length) {
+      html += '<div class="container"><section class="section detail-block">'
+        + '<div class="section-head"><h3 class="section-title">Details</h3></div>'
+        + '<div class="detail-facts">' + facts.map(function (f) {
+            return '<div class="fact"><span class="fact-label">' + escapeHtml(f[0]) + '</span><span class="fact-value">' + escapeHtml(f[1]) + '</span></div>';
+          }).join("") + '</div>'
+        + '</section></div>';
+    }
+
+    // Cast section (3 columns on mobile).
     if (info.cast && info.cast.length) {
-      html += '<div class="container">'
-        + '<section class="section">'
-        +   '<div class="section-head"><h3 class="section-title">Cast &amp; Crew <span class="accent">(' + info.cast.length + ')</span></h3></div>'
-        +   '<div class="cast-grid">' + info.cast.slice(0, 24).map(function (c) {
+      html += '<div class="container"><section class="section detail-block">'
+        + '<div class="section-head"><h3 class="section-title">Cast &amp; Crew <span class="accent">(' + info.cast.length + ')</span></h3></div>'
+        + '<div class="cast-grid">' + info.cast.slice(0, 24).map(function (c) {
             var initial = (c.name || "?").charAt(0).toUpperCase();
             return ''
               + '<div class="cast-card">'
@@ -572,16 +556,25 @@
               +   '</div>'
               + '</div>';
           }).join("") + '</div>'
-        + '</section>';
+        + '</section></div>';
     }
 
-    html += '</div>'; // close container
+    // TV: seasons + episodes (clearly separated, own container).
+    if (type === "tv" && detailState.seasons && detailState.seasons.seasons && detailState.seasons.seasons.length) {
+      detailState.currentSeason = detailState.seasons.seasons[0].season;
+      html += '<div class="container"><section class="section detail-block">'
+        +   '<div class="section-head"><h3 class="section-title">Episodes <span class="accent">- Season ' + detailState.currentSeason + '</span></h3></div>'
+        +   '<div class="season-bar" id="season-bar"></div>'
+        +   '<div class="episode-list" id="episode-list"></div>'
+        + '</section></div>';
+    } else if (type === "tv") {
+      html += '<div class="container"><section class="section detail-block"><div class="empty-state">No season information available for this title.</div></section></div>';
+    }
+
     root.innerHTML = html;
 
-    // Wire up actions
     wireDetailActions();
 
-    // Wire up season selector for TV
     if (type === "tv" && detailState.seasons && detailState.seasons.seasons) {
       wireSeasons();
       renderEpisodes(detailState.currentSeason);
@@ -601,7 +594,6 @@
         if (type === "movie") {
           openPlayerModal(info.title, info.detailPath, info.subjectId, 0, 0);
         } else {
-          // scroll to episodes
           var ep = $("#episode-list");
           if (ep) ep.scrollIntoView({ behavior: "smooth", block: "start" });
         }
@@ -643,7 +635,6 @@
         detailState.currentSeason = parseInt(b.dataset.se);
         $all(".season-btn", bar).forEach(function (x) { x.classList.toggle("active", x === b); });
         renderEpisodes(detailState.currentSeason);
-        // update section title
         var st = $(".section-title");
         if (st) st.innerHTML = 'Episodes <span class="accent">- Season ' + detailState.currentSeason + '</span>';
       });
@@ -709,13 +700,13 @@
 
   function openPlayerModal(title, detailPath, subjectId, season, episode) {
     var modal = $("#player-modal");
-    $("#player-title").textContent = title + (season ? " S" + season + "E" + episode : "");
+    var info = detailState.info || {};
+    var fullTitle = title + (season ? " S" + season + "E" + episode : "");
+    $("#player-title").textContent = fullTitle;
     var body = $("#player-body");
     body.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching streams...</div>';
     modal.classList.add("open");
     document.body.style.overflow = "hidden";
-    // On mobile the modal is full-screen; scroll the content to the top so
-    // the video is immediately visible.
     body.scrollTop = 0;
     if (body.scrollTo) body.scrollTo(0, 0);
 
@@ -730,13 +721,13 @@
         return;
       }
       detailState.selectedQuality = best;
-      renderPlayer(title, best, season, episode);
+      renderPlayer(fullTitle, best, season, episode, info);
     }).catch(function (e) {
       body.innerHTML = '<div class="error-box">Failed to load stream: ' + escapeHtml(e.message) + '</div>';
     });
   }
 
-  function renderPlayer(title, quality, season, episode) {
+  function renderPlayer(fullTitle, quality, season, episode, info) {
     var body = $("#player-body");
     var qualities = detailState.qualities || [];
     var qButtons = qualities.map(function (q) {
@@ -746,20 +737,66 @@
       return '<button class="quality-btn' + active + vip + '"' + disabled + ' data-res="' + q.resolution + '">' + q.resolution + 'P' + (q.vipLocked ? ' <span class="vip-tag">VIP</span>' : '') + '</button>';
     }).join("");
 
-    // Route the MP4 through /api/stream so the browser can play it (the CDN
-    // requires a Referer header and returns 429 without it).
     var playSrc = streamProxyUrl(quality.url);
     var directUrl = quality.url;
+
+    // Movie/show info block shown above the video.
+    var infoBlock = "";
+    if (info) {
+      var year = (info.releaseDate || "").slice(0, 4);
+      var genre = (info.genre || "").split(",").slice(0, 3).join(", ");
+      var rating = info.imdbRatingValue ? parseFloat(info.imdbRatingValue).toFixed(1) : "";
+      var metaParts = [];
+      if (rating) metaParts.push('<span class="rating"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>' + rating + '</span>');
+      if (year) metaParts.push('<span>' + escapeHtml(year) + '</span>');
+      if (info.durationText) metaParts.push('<span>' + escapeHtml(info.durationText) + '</span>');
+      if (genre) metaParts.push('<span>' + escapeHtml(genre) + '</span>');
+      infoBlock = '<div class="player-info">'
+        + '<h3 class="player-info-title">' + escapeHtml(info.title || fullTitle) + '</h3>'
+        + (metaParts.length ? '<div class="player-info-meta">' + metaParts.join("") + '</div>' : '')
+        + (info.description ? '<p class="player-info-desc">' + escapeHtml(info.description) + '</p>' : '')
+        + '</div>';
+    }
+
+    // Audio languages (dubs) and subtitles.
+    var dubs = (info && info.dubs) ? info.dubs.filter(function (d) { return d.kind === "dub"; }) : [];
+    var subTracks = (info && info.dubs) ? info.dubs.filter(function (d) { return d.kind === "subtitle"; }) : [];
+    var subtitleList = (info && info.subtitles) ? info.subtitles.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
+
+    var langBlock = "";
+    if (dubs.length || subTracks.length || subtitleList.length) {
+      langBlock = '<div class="player-langs">';
+      if (dubs.length) {
+        langBlock += '<div class="lang-group"><span class="lang-label">Audio:</span>'
+          + '<div class="lang-chips">' + dubs.map(function (d) {
+              var cls = d.original ? 'lang-chip active' : 'lang-chip';
+              var tag = d.original ? ' <span class="lang-orig">Original</span>' : '';
+              return '<a class="' + cls + '"' + (d.detailPath ? ' href="detail.html?path=' + escapeHtml(d.detailPath) + '"' : '') + '>' + escapeHtml(d.lanName || d.lanCode) + tag + '</a>';
+            }).join("") + '</div></div>';
+      }
+      var subs = subTracks.length
+        ? subTracks.map(function (d) { return escapeHtml(d.lanName || d.lanCode); })
+        : subtitleList;
+      if (subs.length) {
+        langBlock += '<div class="lang-group"><span class="lang-label">Subtitles:</span>'
+          + '<div class="lang-chips">' + subs.map(function (s) {
+              return '<span class="lang-chip">' + escapeHtml(s) + '</span>';
+            }).join("") + '</div></div>';
+      }
+      langBlock += '</div>';
+    }
+
     body.innerHTML = ''
+      + infoBlock
       + '<div class="player-video"><video id="player-video-el" src="' + escapeHtml(playSrc) + '" controls autoplay playsinline></video></div>'
       + '<div class="quality-bar">'
       +   '<span class="quality-label">Quality:</span>'
       +   qButtons
       + '</div>'
-      + '<div class="text-muted mt-4" style="font-size:13px">Now playing: ' + escapeHtml(title) + (season ? ' S' + season + 'E' + episode : '') + ' at ' + quality.resolution + 'P' + (quality.size_mb ? ' (' + quality.size_mb + ' MB)' : '') + '</div>'
+      + '<div class="text-muted mt-4" style="font-size:13px">Now playing: ' + escapeHtml(fullTitle) + ' at ' + quality.resolution + 'P' + (quality.size_mb ? ' (' + quality.size_mb + ' MB)' : '') + '</div>'
+      + langBlock
       + '<div id="player-fallback" class="error-box" style="display:none;margin-top:12px"></div>';
 
-    // Detect proxy/CDN rejection (426/429) and show a helpful fallback.
     var vidEl = $("video", body);
     if (vidEl) {
       var fallbackShown = false;
@@ -770,12 +807,11 @@
         if (fb) {
           fb.style.display = "";
           fb.innerHTML = '<div style="margin-bottom:8px">' + escapeHtml(msg) + '</div>'
-            + '<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">The video CDN (bcdnxw.hakunaymatata.com) rejects browser and cloud-IP requests without a Referer header. Run the Python scraper locally to download this file, or use curl:</div>'
+            + '<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">The video CDN rejects browser and cloud-IP requests without a Referer header. Run the Python scraper locally to download this file, or use curl:</div>'
             + '<code style="display:block;background:#000;padding:8px;border-radius:4px;font-size:11px;word-break:break-all">curl -H "Referer: https://netnaija.film/" -O "' + escapeHtml(directUrl) + '"</code>';
         }
       }
       vidEl.addEventListener("error", function () {
-        // Check the proxy URL to see if it returned an error status.
         fetch(playSrc, { method: "HEAD" }).then(function (r) {
           if (r.status === 426 || r.status === 429 || r.status === 403) {
             showFallback("This video cannot be played in the browser (CDN returned " + r.status + ").");
@@ -859,7 +895,6 @@
       }).join("") + '</div>'
       + '<div class="text-muted mt-4" style="font-size:12px">Links expire in ~24 hours. Downloads route through the /api/stream proxy. If the proxy is blocked (426), use "Copy URL" and download with: <code style="background:#000;padding:2px 6px;border-radius:3px">curl -H "Referer: https://netnaija.film/" -O "&lt;url&gt;"</code></div>';
 
-      // Wire copy-to-clipboard for direct URL buttons.
       $all(".copy-url-btn", body).forEach(function (b) {
         b.addEventListener("click", function () {
           var url = b.getAttribute("data-url") || "";
@@ -872,7 +907,6 @@
               setTimeout(function () { b.textContent = "Copy URL"; }, 1500);
             });
           } else {
-            // Fallback for older browsers.
             var ta = document.createElement("textarea");
             ta.value = url; document.body.appendChild(ta); ta.select();
             try { document.execCommand("copy"); b.textContent = "Copied!"; } catch (e) { b.textContent = "Copy failed"; }
@@ -931,44 +965,5 @@
     else if (page === "detail") initDetail();
   });
 
-  // Expose a tiny API for debugging
   window.MovieBox = { api: api, toast: toast };
-})();
-
-// === PERFORMANCE: Limit card rendering and add lazy loading ===
-(function() {
-  const MAX_CARDS_PER_SECTION = 20;
-  const MAX_SECTIONS_MOBILE = 5;
-  
-  // Override renderHomeSections to limit cards
-  if (typeof originalRenderHomeSections === 'undefined' && typeof renderHomeSections === 'function') {
-    const originalRenderHomeSections = renderHomeSections;
-    window.renderHomeSections = function(sections) {
-      const isMobile = window.innerWidth < 768;
-      const limitedSections = isMobile ? sections.slice(0, MAX_SECTIONS_MOBILE) : sections;
-      originalRenderHomeSections(limitedSections);
-    };
-  }
-  
-  // Add lazy loading to images
-  document.addEventListener('DOMContentLoaded', function() {
-    // Use IntersectionObserver for lazy loading if available
-    if ('IntersectionObserver' in window) {
-      const imgObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const img = entry.target;
-            if (img.dataset.src) {
-              img.src = img.dataset.src;
-              img.removeAttribute('data-src');
-            }
-            observer.unobserve(img);
-          }
-        });
-      }, { rootMargin: '100px' });
-      
-      // Observe all images with data-src
-      document.querySelectorAll('img[data-src]').forEach(img => imgObserver.observe(img));
-    }
-  });
 })();
