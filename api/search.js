@@ -4,43 +4,97 @@
 
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
+// Nuxt's __NUXT_DATA__ is a flat JSON array where object values are indices
+// that point to other elements in the same array. This resolver follows those
+// references to reconstruct the full object tree.
+function nuxtResolve(idx, data, depth) {
+  if (depth === undefined) depth = 0;
+  if (depth > 12) return null;
+  if (typeof idx !== "number" || idx < 0 || idx >= data.length) return idx;
+
+  const val = data[idx];
+  if (val === null || val === undefined) return val;
+  if (typeof val === "string" || typeof val === "boolean") return val;
+  if (typeof val === "number") return val;
+
+  if (Array.isArray(val)) {
+    // Typed reference like ["ShallowReactive", index] or ["Reactive", index]
+    if (val.length >= 2 && typeof val[0] === "string" && typeof val[1] === "number") {
+      return nuxtResolve(val[1], data, depth + 1);
+    }
+    // Regular array - resolve each element
+    const arr = [];
+    for (let i = 0; i < val.length; i++) {
+      if (typeof val[i] === "number") {
+        arr.push(nuxtResolve(val[i], data, depth + 1));
+      } else {
+        arr.push(val[i]);
+      }
+    }
+    return arr;
+  }
+
+  if (typeof val === "object") {
+    const result = {};
+    for (const k of Object.keys(val)) {
+      if (typeof val[k] === "number") {
+        result[k] = nuxtResolve(val[k], data, depth + 1);
+      } else {
+        result[k] = val[k];
+      }
+    }
+    return result;
+  }
+
+  return val;
+}
+
 function norm(s) {
   if (!s) return null;
   return {
-    title: s.title || "",
+    title: String(s.title || ""),
     subjectId: String(s.subjectId || s.id || ""),
     subjectType: s.subjectType,
-    detailPath: s.detailPath || "",
+    detailPath: String(s.detailPath || ""),
     type: s.subjectType === 1 ? "movie" : (s.subjectType === 2 ? "tv" : "other"),
-    genre: s.genre || "",
-    imdbRating: s.imdbRatingValue || s.imdbRating || "",
+    genre: String(s.genre || ""),
+    imdbRating: String(s.imdbRatingValue || s.imdbRating || ""),
+    imdbRatingValue: String(s.imdbRatingValue || ""),
     imdbRatingCount: s.imdbRatingCount || 0,
-    country: s.countryName || "",
-    description: s.description || "",
-    releaseDate: s.releaseDate || "",
+    country: String(s.countryName || ""),
+    countryName: String(s.countryName || ""),
+    description: String(s.description || ""),
+    releaseDate: String(s.releaseDate || ""),
     duration: s.duration || 0,
     cover: s.cover?.url || (typeof s.cover === "string" ? s.cover : "") || "",
     hasResource: s.hasResource || false,
   };
 }
 
-function extractSubjectsFromNuxt(nuxt) {
+function extractSubjectsFromNuxt(data) {
   const results = [];
   const seen = new Set();
-  
-  function walk(o) {
-    if (!o || typeof o !== "object") return;
-    if (Array.isArray(o)) { o.forEach(walk); return; }
-    if (o.subjectId && o.title && o.detailPath) {
-      const sid = String(o.subjectId);
-      if (!seen.has(sid)) {
+
+  // Walk the flat array and find objects that have subjectId/title/detailPath
+  // keys. These are subject (movie/TV) objects. Resolve each one fully.
+  for (let i = 0; i < data.length; i++) {
+    const item = data[i];
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    if (
+      item.hasOwnProperty("subjectId") &&
+      item.hasOwnProperty("title") &&
+      item.hasOwnProperty("detailPath") &&
+      item.hasOwnProperty("subjectType")
+    ) {
+      const resolved = nuxtResolve(i, data, 0);
+      if (!resolved || !resolved.title || !resolved.detailPath) continue;
+      const sid = String(resolved.subjectId || "");
+      if (sid && !seen.has(sid)) {
         seen.add(sid);
-        results.push(norm(o));
+        results.push(norm(resolved));
       }
     }
-    Object.values(o).forEach(walk);
   }
-  walk(nuxt);
   return results;
 }
 
@@ -57,7 +111,6 @@ export default async function handler(req, res) {
   const results = [];
   const errors = [];
 
-  // Try all 3 sites in parallel
   const sites = [
     { name: "netnaija", url: `https://netnaija.film/search-result?keyword=${encoded}` },
     { name: "officialmoviebox", url: `https://officialmoviebox.com/newWeb/searchResult?keyword=${encoded}` },
@@ -71,11 +124,10 @@ export default async function handler(req, res) {
     });
     if (!r.ok) throw new Error(`${site.name}: HTTP ${r.status}`);
     const html = await r.text();
-    
-    // Parse __NUXT_DATA__ from the HTML
+
     const m = html.match(/<script[^>]*id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
     if (!m) throw new Error(`${site.name}: no NUXT_DATA`);
-    
+
     const nuxt = JSON.parse(m[1]);
     const subjects = extractSubjectsFromNuxt(nuxt);
     return { site: site.name, subjects };
@@ -84,7 +136,7 @@ export default async function handler(req, res) {
   for (const r of responses) {
     if (r.status === "fulfilled" && r.value.subjects.length > 0) {
       for (const s of r.value.subjects) {
-        if (s && s.title && !seen.has(s.subjectId)) {
+        if (s && s.title && s.subjectId && !seen.has(s.subjectId)) {
           seen.add(s.subjectId);
           results.push(s);
         }
@@ -94,7 +146,6 @@ export default async function handler(req, res) {
     }
   }
 
-  // Sort by rating
   results.sort((a, b) => {
     const ra = parseFloat(a.imdbRating) || 0;
     const rb = parseFloat(b.imdbRating) || 0;
@@ -106,5 +157,6 @@ export default async function handler(req, res) {
     count: Math.min(results.length, limit),
     total: results.length,
     results: results.slice(0, limit),
+    errors: errors.length ? errors : undefined,
   });
 }
