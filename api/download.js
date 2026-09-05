@@ -1,6 +1,5 @@
-// GET /api/stream?url=<mp4-url>
-// Edge Runtime streaming proxy. Injects Referer header for the video CDN.
-// Supports Range requests for video seeking.
+// GET /api/download?url=<mp4-url>&filename=Movie.mp4
+// Edge Runtime download proxy. Same as stream but sets Content-Disposition.
 
 export const config = {
   runtime: 'edge',
@@ -17,8 +16,11 @@ const ALLOWED_HOSTS = [
   "pacdn.aoneroom.com",
 ];
 
+function sanitizeFilename(name) {
+  return (name || "video.mp4").replace(/[^\w.\- ]/g, "").substring(0, 100) || "video.mp4";
+}
+
 export default async function handler(req) {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -26,13 +28,13 @@ export default async function handler(req) {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Range",
-        "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition",
       },
     });
   }
 
   const url = new URL(req.url);
   const targetUrl = url.searchParams.get("url");
+  const filename = sanitizeFilename(url.searchParams.get("filename") || "video.mp4");
 
   if (!targetUrl) {
     return new Response(JSON.stringify({ error: "Missing url parameter" }), {
@@ -61,14 +63,11 @@ export default async function handler(req) {
   try {
     const upstreamHeaders = {
       "User-Agent": UA,
-      "Accept": "video/webm,video/ogg,video/*;q=0.9,application/ogg,image/png,*/*;q=0.8",
+      "Accept": "*/*",
       "Accept-Language": "en-US,en;q=0.9",
       "Accept-Encoding": "identity",
       "Referer": "https://netnaija.film/",
       "Origin": "https://netnaija.film",
-      "Sec-Fetch-Dest": "video",
-      "Sec-Fetch-Mode": "no-cors",
-      "Sec-Fetch-Site": "cross-site",
     };
 
     if (req.headers.get("range")) {
@@ -80,12 +79,11 @@ export default async function handler(req) {
       redirect: "follow",
     });
 
-    // Build response headers
     const respHeaders = new Headers();
     respHeaders.set("Access-Control-Allow-Origin", "*");
-    respHeaders.set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Disposition");
-
-    const forward = ["content-type", "content-length", "content-range", "accept-ranges", "cache-control", "etag", "last-modified"];
+    respHeaders.set("Content-Disposition", `attachment; filename="${filename}"`);
+    
+    const forward = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"];
     for (const h of forward) {
       const v = upstream.headers.get(h);
       if (v) respHeaders.set(h, v);
