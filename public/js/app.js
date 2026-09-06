@@ -1020,152 +1020,321 @@
       audioOptions.push({ label: d.lanName || d.lanCode || "Audio", detailPath: d.detailPath, original: !!d.original });
     });
 
-    // Build quality options for Plyr
-    var qualityOptions = qualities.filter(function(q) { return q.url && !q.vipLocked; }).map(function(q) {
-      return { value: q.resolution, label: q.resolution + "P", src: streamProxyUrl(q.url) };
-    });
+    var freeQualities = qualities.filter(function(q) { return q.url && !q.vipLocked; });
 
-    // Build the video element with Plyr-compatible markup
+    // Build the player HTML
     var html = ''
-      + '<div class="plyr-wrap">'
-      +   '<video id="plyr-video" playsinline controls crossorigin data-poster="' + escapeHtml(info.cover || "") + '">'
-      +     '<source src="' + escapeHtml(playSrc) + '" type="video/mp4" size="' + quality.resolution + '">'
-      +     qualityOptions.map(function(q) {
-              return '<source src="' + escapeHtml(q.src) + '" type="video/mp4" size="' + q.value + '">';
-            }).join("")
-      +   '</video>'
+      + '<div class="player-container">'
+      +   '<div class="player-video-wrap">'
+      +     '<video id="plyr-video" playsinline crossorigin preload="metadata"></video>'
+      +     '<div class="player-overlay" id="player-overlay"></div>'
+      +     '<div class="player-controls" id="player-controls">'
+      +       '<div class="player-progress-wrap" id="player-progress-wrap">'
+      +         '<div class="player-progress-bar" id="player-progress-bar">'
+      +           '<div class="player-progress-buffered" id="player-progress-buffered"></div>'
+      +           '<div class="player-progress-filled" id="player-progress-filled"></div>'
+      +         '</div>'
+      +       '</div>'
+      +       '<div class="player-controls-row">'
+      +         '<button class="pc-btn" id="pc-play" aria-label="Play/Pause"><svg id="pc-play-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>'
+      +         '<button class="pc-btn" id="pc-rewind" aria-label="Rewind 10s"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg></button>'
+      +         '<button class="pc-btn" id="pc-forward" aria-label="Forward 10s"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg></button>'
+      +         '<span class="pc-time" id="pc-time">0:00 / 0:00</span>'
+      +         '<div class="pc-spacer"></div>'
+      +         '<button class="pc-btn" id="pc-volume" aria-label="Volume"><svg id="pc-volume-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/></svg></button>'
+      +         '<button class="pc-btn" id="pc-subtitles" aria-label="Subtitles"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 4H5a2 2 0 00-2 2v12a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zM4 18V6h16v12H4zm2-4h6v-1H6v1zm9 0h5v-1h-5v1z"/></svg></button>'
+      +         '<button class="pc-btn" id="pc-settings" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7.07 7.07 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.6-.22l-2.39.96a7.03 7.03 0 00-1.62-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54c-.59.24-1.13.55-1.62.94l-2.39-.96a.5.5 0 00-.6.22L2.74 8.84a.5.5 0 00.12.64l2.03 1.58a7.07 7.07 0 000 1.88l-2.03 1.58a.5.5 0 00-.12.64l1.92 3.32a.5.5 0 00.6.22l2.39-.96c.49.39 1.03.7 1.62.94l.36 2.54a.5.5 0 00.5.42h3.84a.5.5 0 00.5-.42l.36-2.54c.59-.24 1.13-.55 1.62-.94l2.39.96a.5.5 0 00.6-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7z"/></svg></button>'
+      +         '<button class="pc-btn" id="pc-fullscreen" aria-label="Fullscreen"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>'
+      +       '</div>'
+      +     '</div>'
+      +     '<div class="pc-menu" id="pc-menu-settings">'
+      +       '<div class="pc-menu-section"><div class="pc-menu-title">Quality</div></div>'
+      +       '<div class="pc-menu-section"><div class="pc-menu-title">Audio</div></div>'
+      +     '</div>'
+      +     '<div class="pc-menu" id="pc-menu-subs">'
+      +       '<div class="pc-menu-section"><div class="pc-menu-title">Subtitles</div></div>'
+      +     '</div>'
+      +   '</div>'
       + '</div>';
 
     wrap.innerHTML = html;
 
-    // Initialize Plyr with custom settings
-    var plyrConfig = {
-      controls: [
-        'play-large', 'play', 'progress', 'current-time', 'duration',
-        'mute', 'volume', 'settings', 'pip', 'fullscreen',
-        'rewind', 'fast-forward'
-      ],
-      settings: ['quality', 'speed'],
-      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-      quality: { default: quality.resolution, options: qualityOptions.map(function(q) { return q.value; }), forced: true, onChange: function(e) { return e; } },
-      seekTime: 10,
-      tooltips: { seek: true, volume: true },
-      keyboard: { focused: true, global: true },
-      i18n: {
-        rewind: 'Rewind 10s',
-        fastForward: 'Forward 10s',
-        qualityLabel: 'Quality',
-        speedLabel: 'Speed'
-      }
-    };
+    var video = document.getElementById('plyr-video');
+    video.src = playSrc;
 
-    var player = new Plyr('#plyr-video', plyrConfig);
-    detailState.plyrInstance = player;
-
-    // Store quality mapping for source switching
-    detailState.qualitySources = {};
-    qualityOptions.forEach(function(q) {
-      detailState.qualitySources[q.value] = q.src;
-    });
-    detailState.qualitySources[quality.resolution] = playSrc;
-
-    // Handle quality change
-    player.on('qualitychange', function(e) {
-      var res = e.detail.quality;
-      var src = detailState.qualitySources[res];
-      if (src) {
-        var currentTime = player.currentTime;
-        var wasPlaying = player.playing;
-        player.source = {
-          type: 'video',
-          title: info.title || '',
-          sources: [{ src: src, type: 'video/mp4', size: res }]
-        };
-        player.once('loadedmetadata', function() {
-          player.currentTime = currentTime;
-          if (wasPlaying) player.play();
-        });
-      }
+    // Build quality buttons
+    var settingsMenu = document.getElementById('pc-menu-settings');
+    var qualitySection = settingsMenu.querySelector('.pc-menu-section');
+    freeQualities.forEach(function(q) {
+      var btn = document.createElement('button');
+      btn.className = 'pc-menu-item' + (q.resolution === quality.resolution ? ' active' : '');
+      btn.setAttribute('data-res', q.resolution);
+      btn.innerHTML = '<span>' + q.resolution + 'P</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+      qualitySection.appendChild(btn);
     });
 
-    // Add custom rewind/forward buttons (Plyr 3.7.8 doesn't have them built-in)
-    // We'll add them as overlay buttons
-    var plyrContainer = wrap.querySelector('.plyr');
-    if (plyrContainer) {
-      var rewindBtn = document.createElement('button');
-      rewindBtn.className = 'plyr__controls__item plyr__control plyr-seek-btn';
-      rewindBtn.setAttribute('data-plyr', 'rewind');
-      rewindBtn.innerHTML = '<svg aria-hidden="true" focusable="false"><path d="M12.5 3C7.8 3 4 6.8 4 11.5S7.8 20 12.5 20s8.5-3.8 8.5-8.5S17.2 3 12.5 3zm0 15.5c-3.9 0-7-3.1-7-7s3.1-7 7-7 7 3.1 7 7-3.1 7-7 7zM11 9l3 2.5-3 2.5V9z" fill="currentColor"/></svg><span class="plyr__tooltip">Rewind 10s</span>';
-      rewindBtn.addEventListener('click', function() {
-        player.currentTime = Math.max(0, player.currentTime - 10);
-      });
+    // Build audio buttons
+    var audioSection = document.createElement('div');
+    audioSection.className = 'pc-menu-section';
+    audioSection.innerHTML = '<div class="pc-menu-title">Audio</div>';
+    audioOptions.forEach(function(a) {
+      var btn = document.createElement('button');
+      btn.className = 'pc-menu-item' + (a.active !== false ? ' active' : '');
+      btn.setAttribute('data-dub', a.detailPath || '');
+      btn.innerHTML = '<span>' + escapeHtml(a.label) + (a.original ? ' <span class="pc-tag">ORIG</span>' : '') + '</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+      audioSection.appendChild(btn);
+    });
+    settingsMenu.appendChild(audioSection);
 
-      var forwardBtn = document.createElement('button');
-      forwardBtn.className = 'plyr__controls__item plyr__control plyr-seek-btn';
-      forwardBtn.setAttribute('data-plyr', 'fast-forward');
-      forwardBtn.innerHTML = '<svg aria-hidden="true" focusable="false"><path d="M11.5 3C6.8 3 3 6.8 3 11.5S6.8 20 11.5 20s8.5-3.8 8.5-8.5S16.2 3 11.5 3zm0 15.5c-3.9 0-7-3.1-7-7s3.1-7 7-7 7 3.1 7 7-3.1 7-7 7zM10 9l3 2.5-3 2.5V9z" fill="currentColor"/></svg><span class="plyr__tooltip">Forward 10s</span>';
-      forwardBtn.addEventListener('click', function() {
-        player.currentTime = Math.min(player.duration || 0, player.currentTime + 10);
-      });
+    // State
+    var isPlaying = false;
+    var currentTime = 0;
+    var duration = 0;
+    var volume = 1;
+    var muted = false;
+    var controlsVisible = true;
+    var idleTimer = null;
+    var activeCaptionUrl = null;
+    var captionsData = [];
 
-      // Insert into controls
-      var controls = plyrContainer.querySelector('.plyr__controls');
-      if (controls) {
-        var progress = controls.querySelector('[data-plyr="progress"]');
-        if (progress) {
-          progress.parentNode.insertBefore(rewindBtn, progress);
-          if (progress.nextSibling) {
-            progress.parentNode.insertBefore(forwardBtn, progress.nextSibling);
-          } else {
-            controls.appendChild(forwardBtn);
-          }
-        }
+    var playIcon = '<path d="M8 5v14l11-7z"/>';
+    var pauseIcon = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+    var volFull = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/>';
+    var volMute = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.03zM4 18h4l5 5V9.18l-5 5H4V18zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/><path d="M19 8.5l5 5M24 8.5l-5 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>';
+
+    function formatTime(s) {
+      if (!s || isNaN(s)) return '0:00';
+      var m = Math.floor(s / 60);
+      var sec = Math.floor(s % 60);
+      return m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    function setPlaying(playing) {
+      isPlaying = playing;
+      document.getElementById('pc-play-icon').innerHTML = playing ? pauseIcon : playIcon;
+    }
+
+    function updateProgress() {
+      currentTime = video.currentTime || 0;
+      duration = video.duration || 0;
+      var pct = duration ? (currentTime / duration * 100) : 0;
+      document.getElementById('pc-progress-filled').style.width = pct + '%';
+      document.getElementById('pc-time').textContent = formatTime(currentTime) + ' / ' + formatTime(duration);
+    }
+
+    function updateBuffered() {
+      if (video.buffered && video.buffered.length > 0) {
+        var end = video.buffered.end(video.buffered.length - 1);
+        var pct = duration ? (end / duration * 100) : 0;
+        document.getElementById('pc-progress-buffered').style.width = pct + '%';
       }
     }
 
-    // Load captions
-    fetchCaptions(detailState.currentDubPath || detailState.detailPath, season, episode).then(function(captions) {
-      if (!captions || captions.length === 0 || !player) return;
-      var video = document.getElementById('plyr-video');
-      captions.forEach(function(cap, i) {
-        var track = document.createElement('track');
-        track.kind = 'subtitles';
-        track.label = cap.lanName || cap.lanCode || ('Lang ' + (i + 1));
-        track.srclang = cap.lanCode || ('lang' + i);
-        track.src = '/api/stream?url=' + encodeURIComponent(cap.url);
-        video.appendChild(track);
+    function togglePlay() {
+      if (video.paused) video.play().catch(function(){});
+      else video.pause();
+    }
+
+    function setControlsVisible(visible) {
+      controlsVisible = visible;
+      document.getElementById('player-controls').style.opacity = visible ? '1' : '0';
+      document.getElementById('player-controls').style.pointerEvents = visible ? 'auto' : 'none';
+    }
+
+    function showControls() {
+      setControlsVisible(true);
+      clearTimeout(idleTimer);
+      if (isPlaying) {
+        idleTimer = setTimeout(function() { setControlsVisible(false); }, 3000);
+      }
+    }
+
+    function toggleMenu(menu) {
+      var settings = document.getElementById('pc-menu-settings');
+      var subs = document.getElementById('pc-menu-subs');
+      if (menu === 'settings') {
+        subs.classList.remove('open');
+        settings.classList.toggle('open');
+      } else if (menu === 'subs') {
+        settings.classList.remove('open');
+        subs.classList.toggle('open');
+      } else {
+        settings.classList.remove('open');
+        subs.classList.remove('open');
+      }
+    }
+
+    // Video events
+    video.addEventListener('play', function() { setPlaying(true); showControls(); });
+    video.addEventListener('pause', function() { setPlaying(false); setControlsVisible(true); clearTimeout(idleTimer); });
+    video.addEventListener('timeupdate', updateProgress);
+    video.addEventListener('progress', updateBuffered);
+    video.addEventListener('loadedmetadata', updateProgress);
+    video.addEventListener('volumechange', function() {
+      document.getElementById('pc-volume-icon').innerHTML = (video.muted || video.volume === 0) ? volMute : volFull;
+    });
+
+    // Controls
+    document.getElementById('pc-play').addEventListener('click', function(e) { e.stopPropagation(); togglePlay(); });
+    document.getElementById('pc-rewind').addEventListener('click', function(e) { e.stopPropagation(); video.currentTime = Math.max(0, video.currentTime - 10); });
+    document.getElementById('pc-forward').addEventListener('click', function(e) { e.stopPropagation(); video.currentTime = Math.min(video.duration || 0, video.currentTime + 10); });
+    document.getElementById('pc-volume').addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (video.muted || video.volume === 0) { video.muted = false; video.volume = 1; }
+      else { video.muted = true; }
+    });
+    document.getElementById('pc-subtitles').addEventListener('click', function(e) { e.stopPropagation(); toggleMenu('subs'); });
+    document.getElementById('pc-settings').addEventListener('click', function(e) { e.stopPropagation(); toggleMenu('settings'); });
+    document.getElementById('pc-fullscreen').addEventListener('click', function(e) {
+      e.stopPropagation();
+      var wrap = document.querySelector('.player-video-wrap');
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (wrap.requestFullscreen) wrap.requestFullscreen();
+    });
+
+    // Progress bar seek
+    var progressWrap = document.getElementById('player-progress-wrap');
+    progressWrap.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var rect = progressWrap.getBoundingClientRect();
+      var pct = (e.clientX - rect.left) / rect.width;
+      if (duration) video.currentTime = pct * duration;
+    });
+
+    // Tap video to toggle controls
+    var videoWrap = document.querySelector('.player-video-wrap');
+    videoWrap.addEventListener('click', function(e) {
+      if (e.target.closest('.player-controls') || e.target.closest('.pc-menu')) return;
+      if (controlsVisible) { setControlsVisible(false); toggleMenu('close'); }
+      else showControls();
+    });
+
+    // Quality selection
+    settingsMenu.addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-res]');
+      if (!btn) return;
+      var res = parseInt(btn.getAttribute('data-res'));
+      var q = freeQualities.find(function(x) { return x.resolution === res; });
+      if (!q) return;
+      var t = video.currentTime;
+      var wasPlaying = !video.paused;
+      video.src = streamProxyUrl(q.url);
+      video.addEventListener('loadedmetadata', function onMeta() {
+        video.removeEventListener('loadedmetadata', onMeta);
+        video.currentTime = t;
+        if (wasPlaying) video.play().catch(function(){});
       });
-      // Reload Plyr to pick up new tracks
-      player.destroy();
-      player = new Plyr('#plyr-video', plyrConfig);
-      detailState.plyrInstance = player;
+      settingsMenu.querySelectorAll('[data-res]').forEach(function(b) { b.classList.toggle('active', b === btn); });
+      toggleMenu('close');
+    });
+
+    // Audio selection
+    settingsMenu.addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-dub]');
+      if (!btn) return;
+      var dubPath = btn.getAttribute('data-dub');
+      if (!dubPath || dubPath === (detailState.currentDubPath || detailState.detailPath)) { toggleMenu('close'); return; }
+      toggleMenu('close');
+      detailState.currentDubPath = dubPath;
+      loadPlayerStream(wrap, dubPath, season, episode);
+    });
+
+    // Click outside menus closes them
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('#pc-menu-settings') && !e.target.closest('#pc-settings')) {
+        document.getElementById('pc-menu-settings').classList.remove('open');
+      }
+      if (!e.target.closest('#pc-menu-subs') && !e.target.closest('#pc-subtitles')) {
+        document.getElementById('pc-menu-subs').classList.remove('open');
+      }
+    });
+
+    // Load captions
+    fetchCaptions(detailState.currentDubPath || detailState.detailPath, season, episode).then(function(caps) {
+      captionsData = caps || [];
+      var subsMenu = document.getElementById('pc-menu-subs');
+      var subsSection = subsMenu.querySelector('.pc-menu-section');
+      // Clear and rebuild
+      subsSection.innerHTML = '<div class="pc-menu-title">Subtitles</div>';
+      var offBtn = document.createElement('button');
+      offBtn.className = 'pc-menu-item active';
+      offBtn.setAttribute('data-cap', '');
+      offBtn.innerHTML = '<span>Off</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+      subsSection.appendChild(offBtn);
+      captionsData.forEach(function(cap) {
+        var btn = document.createElement('button');
+        btn.className = 'pc-menu-item';
+        btn.setAttribute('data-cap', cap.url);
+        btn.setAttribute('data-lan', cap.lanName || cap.lanCode || '');
+        btn.innerHTML = '<span>' + escapeHtml(cap.lanName || cap.lanCode || 'Unknown') + '</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+        subsSection.appendChild(btn);
+      });
+
+      // Subtitle selection
+      subsMenu.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-cap]');
+        if (!btn) return;
+        var capUrl = btn.getAttribute('data-cap');
+        subsMenu.querySelectorAll('[data-cap]').forEach(function(b) { b.classList.toggle('active', b === btn); });
+        toggleMenu('close');
+        if (!capUrl) {
+          activeCaptionUrl = null;
+          document.getElementById('player-overlay').innerHTML = '';
+          return;
+        }
+        activeCaptionUrl = capUrl;
+        loadSubtitle(capUrl);
+      });
     }).catch(function() {});
 
-    // Handle dub switching
-    detailState.switchDub = function(dubPath) {
-      var currentTime = player.currentTime;
-      var wasPlaying = player.playing;
-      loadPlayerStream(wrap, dubPath, season, episode);
-    };
+    function loadSubtitle(url) {
+      var overlay = document.getElementById('player-overlay');
+      fetch('/api/stream?url=' + encodeURIComponent(url))
+        .then(function(r) { return r.text(); })
+        .then(function(srt) {
+          var cues = parseSRT(srt);
+          detailState.subtitleCues = cues;
+          video.addEventListener('timeupdate', function() {
+            if (!activeCaptionUrl || !detailState.subtitleCues) { overlay.innerHTML = ''; return; }
+            var t = video.currentTime;
+            var cue = null;
+            for (var i = 0; i < detailState.subtitleCues.length; i++) {
+              if (t >= detailState.subtitleCues[i].start && t <= detailState.subtitleCues[i].end) {
+                cue = detailState.subtitleCues[i];
+                break;
+              }
+            }
+            overlay.innerHTML = cue ? '<span class="sub-text">' + escapeHtml(cue.text) + '</span>' : '';
+          });
+        })
+        .catch(function() {});
+    }
 
-    detailState.switchQuality = function(q) {
-      var src = streamProxyUrl(q.url);
-      var currentTime = player.currentTime;
-      var wasPlaying = player.playing;
-      player.source = {
-        type: 'video',
-        title: info.title || '',
-        sources: [{ src: src, type: 'video/mp4', size: q.resolution }]
-      };
-      player.once('loadedmetadata', function() {
-        player.currentTime = currentTime;
-        if (wasPlaying) player.play();
-      });
-    };
+    function parseSRT(srt) {
+      var cues = [];
+      var blocks = srt.replace(/\r/g, '').split('\n\n');
+      for (var i = 0; i < blocks.length; i++) {
+        var lines = blocks[i].split('\n');
+        if (lines.length < 2) continue;
+        var times = lines[1].match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);
+        if (!times) continue;
+        var start = parseInt(times[1])*3600 + parseInt(times[2])*60 + parseInt(times[3]) + parseInt(times[4])/1000;
+        var end = parseInt(times[5])*3600 + parseInt(times[6])*60 + parseInt(times[7]) + parseInt(times[8])/1000;
+        var text = lines.slice(2).join('\n').trim();
+        if (text) cues.push({ start: start, end: end, text: text });
+      }
+      return cues;
+    }
+
+    // Initial state
+    document.getElementById('pc-volume-icon').innerHTML = volFull;
+    setPlaying(false);
+    updateProgress();
 
     // Autoplay
-    player.once('canplay', function() {
-      player.play().catch(function() {});
+    video.addEventListener('canplay', function onCanPlay() {
+      video.removeEventListener('canplay', onCanPlay);
+      video.play().catch(function() {});
     });
   }
 
