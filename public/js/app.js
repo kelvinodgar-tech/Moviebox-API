@@ -559,14 +559,13 @@
     if (info.imdbRatingCount) facts.push(["IMDB Votes", Number(info.imdbRatingCount).toLocaleString()]);
     if (info.castCount != null) facts.push(["Cast", info.castCount + " people"]);
 
-    // 1. Cover + title + rating + genre + synopsis + action buttons.
+    // 1. Poster + title + metadata + synopsis (poster-first layout).
     var html = ''
-      + '<div class="detail-backdrop-wrap">'
-      +   '<div class="detail-backdrop" style="background-image:url(\'' + escapeHtml(info.cover || "") + '\')"></div>'
-      +   '<div class="container">'
-      +     '<div class="detail-title-block">'
-      +       (info.cover ? '<img class="detail-cover-img" src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title || "") + '" loading="lazy">' : '')
-+       '<h1>' + escapeHtml(info.title || "Untitled") + '</h1>'
+      + '<div class="detail-poster-section"' + (info.cover ? ' style="--bg:url(\'' + escapeHtml(info.cover) + '\')"' : '') + '>'
+      +   '<div class="container detail-poster-inner">'
+      +     (info.cover ? '<img class="detail-poster-img" src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title || "") + '" loading="lazy">' : '')
+      +     '<div class="detail-info-block">'
+      +       '<h1 class="detail-title">' + escapeHtml(info.title || "Untitled") + '</h1>'
       +       '<div class="detail-meta">'
       +         '<span class="type-badge">' + (type === "tv" ? "TV Series" : "Movie") + '</span>'
       +         '<span class="rating"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>' + rating + '</span>'
@@ -576,10 +575,10 @@
       +       '</div>'
       +       (genres.length ? '<div class="detail-genres">' + genres.map(function (g) { return '<span class="genre-tag">' + escapeHtml(g) + '</span>'; }).join("") + '</div>' : '')
       +       '<p class="detail-synopsis">' + escapeHtml(info.description || "No synopsis available.") + '</p>'
-      +       '<div class="detail-actions" id="detail-actions"></div>'
       +     '</div>'
       +   '</div>'
-      + '</div>';
+      + '</div>'
+      + '<div class="container"><div class="detail-actions" id="detail-actions"></div></div>';
 
     // 3. Trailer (inline player, just above Languages and Details).
     if (info.trailer && info.trailer.url) {
@@ -875,7 +874,7 @@
       +   '<div class="player-video-wrap" id="player-video-wrap">'
       +     '<div class="loading"><div class="spinner"></div>Fetching streams...</div>'
       +   '</div>'
-      +   '<div class="container player-info-block">'
+      +   '<div class="container player-info-block" style="padding-top:28px">'
       +     '<h1 class="player-page-title">' + escapeHtml(info.title || "Untitled") + '</h1>'
       +     '<div class="detail-meta">'
       +       '<span class="type-badge">' + (type === "tv" ? "TV Series" : "Movie") + '</span>'
