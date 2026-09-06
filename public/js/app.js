@@ -888,6 +888,7 @@
       +     (genres.length ? '<div class="detail-genres">' + genres.map(function (g) { return '<span class="genre-tag">' + escapeHtml(g) + '</span>'; }).join("") + '</div>' : '')
       +     '<p class="detail-synopsis">' + escapeHtml(info.description || "No synopsis available.") + '</p>'
       +     '<div class="detail-actions" id="player-actions"></div>'
+      +     (type === "tv" && detailState.seasons && detailState.seasons.seasons ? '<div class="player-seasons-wrap" id="player-seasons-wrap"><div class="player-season-bar" id="player-season-bar"></div><div class="episode-list" id="player-episode-list"></div></div>' : '')
       +   '</div>'
       + '</div>';
 
