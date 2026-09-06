@@ -1505,17 +1505,22 @@
 
     // Idle / show controls on mouse move.
     root.addEventListener("mousemove", function () { setIdle(false); });
+    root.addEventListener("click", onVideoTap);
 
     // TAP behavior: tapping the video toggles the control bar visibility
     // (show/hide). It does NOT toggle play/pause. The play/pause FAB is
     // always visible so the user can pause/resume at any time.
     function onVideoTap(e) {
       // Ignore taps that originate from controls, menus, or buttons.
-      if (e.target !== video) return;
-      e.preventDefault();
-      // Toggle the idle state (which shows/hides the hideable controls bar).
-      var willHide = !root.classList.contains("idle") && !video.paused;
-      setIdle(willHide);
+      var target = e.target;
+      // Accept taps on the video, the vp-root, the subs overlay, the loading spinner, or the big-play area.
+      // But NOT on the controls bar, menus, or any buttons.
+      if (target === video || target === root || target.id === "vp-subs" || target.id === "vp-loading" || target.classList.contains("vp-subs")) {
+        e.preventDefault();
+        // Toggle the idle state (which shows/hides the hideable controls bar).
+        var willHide = !root.classList.contains("idle") && !video.paused;
+        setIdle(willHide);
+      }
     }
     video.addEventListener("click", onVideoTap);
     // On touch devices, a touchend without movement triggers the tap.
@@ -1535,7 +1540,7 @@
       }
     }, { passive: true });
     video.addEventListener("touchend", function (e) {
-      if (!touchMoved && e.target === video) {
+      if (!touchMoved) {
         onVideoTap(e);
       }
     }, { passive: false });
