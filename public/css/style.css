@@ -1913,3 +1913,69 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
   .detail-meta { justify-content: flex-start; }
   .detail-genres { justify-content: flex-start; }
 }
+
+/* === PLYR PLAYER STYLING === */
+.plyr-wrap {
+  width: 100%;
+  background: #000;
+}
+.plyr {
+  --plyr-color-main: #10b84d;
+  --plyr-video-background: #000;
+  --plyr-range-fill-background: #10b84d;
+  --plyr-range-thumb-background: #10b84d;
+  --plyr-video-control-color: #fff;
+  --plyr-video-control-color-hover: #fff;
+  --plyr-video-control-background-hover: rgba(16, 184, 77, 0.8);
+  --plyr-menu-background: rgba(15, 15, 15, 0.95);
+  --plyr-menu-border: rgba(255, 255, 255, 0.1);
+  --plyr-menu-color: #fff;
+  --plyr-menu-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  --plyr-progress-loading-background: rgba(255, 255, 255, 0.2);
+  --plyr-video-progress-buffered-background: rgba(255, 255, 255, 0.2);
+  --plyr-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  border-radius: 0;
+}
+.plyr--video {
+  background: #000;
+  width: 100%;
+}
+.plyr__control--overlaid {
+  background: rgba(16, 184, 77, 0.9);
+  border-radius: 50%;
+}
+.plyr__control--overlaid:hover {
+  background: #10b84d;
+}
+.plyr-seek-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 8px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+.plyr-seek-btn:hover {
+  opacity: 1;
+}
+.plyr-seek-btn svg {
+  width: 20px;
+  height: 20px;
+}
+.plyr__menu__container {
+  background: rgba(15, 15, 15, 0.95);
+  border-radius: 8px;
+}
+@media (max-width: 767px) {
+  .plyr__controls .plyr__controls__item.plyr__control--menu {
+    margin-left: auto;
+  }
+  .plyr-seek-btn {
+    padding: 6px;
+  }
+  .plyr-seek-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+}
