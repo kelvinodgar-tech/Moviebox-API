@@ -84,6 +84,9 @@ and JavaScript (no framework, no build step). Pages:
 |--------|------|-------------|
 | GET | `/api/home` | Full home page: banners, sections, all subjects |
 | GET | `/api/trending?limit=20` | Trending movies and shows (rich fields) |
+| GET | `/api/movies?page=1&limit=20` | All movies (no filter), paginated |
+| GET | `/api/tv-shows?page=1&limit=20` | All TV shows (no filter), paginated |
+| GET | `/api/animation?page=1&limit=20` | All animation (no filter), paginated |
 | GET | `/api/browse?type=movie&genre=Action&country=United+States&year=2024&sort=Latest&page=1&limit=20` | Browse/filter movies, TV shows, and animation by genre, country, year, and sort |
 | GET | `/api/filters` | Available filter values (28 genres, 30 countries, 12 years, 4 sort options) |
 | GET | `/api/search?q=bridgeton&limit=20` | Search by title, scraped from the actual site search pages, results in source order |
