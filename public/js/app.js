@@ -1141,7 +1141,7 @@
     var PLAY_SVG = '<path d="M8 5v14l11-7z"/>';
     var PAUSE_SVG = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
     var VOL_FULL_SVG = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/>';
-    var VOL_MUTE_SVG = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.03zM4 18h4l5 5V9.18l-5 5H4V18zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/>';
+    var VOL_MUTE_SVG = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.03zM4 18h4l5 5V9.18l-5 5H4V18zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/><path d="M19 8.5l5 5M24 8.5l-5 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>';
 
     var idleTimer = null;
     var seeking = false;
@@ -1298,9 +1298,10 @@
     video.addEventListener("loadedmetadata", updateProgress);
     video.addEventListener("timeupdate", function () { updateProgress(); updateSubtitle(); });
     video.addEventListener("progress", updateBuffered);
-    video.addEventListener("waiting", function () { root.classList.add("loading"); });
+    video.addEventListener("waiting", function () { if (!video.paused) root.classList.add("loading"); });
     video.addEventListener("playing", function () { root.classList.remove("loading"); });
     video.addEventListener("canplay", function () { root.classList.remove("loading"); });
+    video.addEventListener("pause", function () { root.classList.remove("loading"); });
     video.addEventListener("volumechange", function () {
       volumeFill.style.width = (video.muted ? 0 : video.volume * 100) + "%";
       muteIcon.innerHTML = (video.muted || video.volume === 0) ? VOL_MUTE_SVG : VOL_FULL_SVG;
