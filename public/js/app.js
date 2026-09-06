@@ -565,7 +565,8 @@
       +   '<div class="detail-backdrop" style="background-image:url(\'' + escapeHtml(info.cover || "") + '\')"></div>'
       +   '<div class="container">'
       +     '<div class="detail-title-block">'
-      +       '<h1>' + escapeHtml(info.title || "Untitled") + '</h1>'
+      +       (info.cover ? '<img class="detail-cover-img" src="' + escapeHtml(info.cover) + '" alt="' + escapeHtml(info.title || "") + '" loading="lazy">' : '')
++       '<h1>' + escapeHtml(info.title || "Untitled") + '</h1>'
       +       '<div class="detail-meta">'
       +         '<span class="type-badge">' + (type === "tv" ? "TV Series" : "Movie") + '</span>'
       +         '<span class="rating"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>' + rating + '</span>'
@@ -911,8 +912,60 @@
       actions.appendChild(backBtn);
     }
 
+    // Wire up season/episode selectors on the player page for TV shows.
+    if (type === "tv" && detailState.seasons && detailState.seasons.seasons) {
+      wirePlayerSeasons(season, episode);
+    }
+
     // Load the stream into the player wrapper.
     loadPlayerStream($("#player-video-wrap"), detailState.currentDubPath || detailState.detailPath, season, episode);
+  }
+
+
+  function wirePlayerSeasons(currentSeason, currentEpisode) {
+    var bar = $("#player-season-bar");
+    if (!bar) return;
+    var seasons = detailState.seasons.seasons || [];
+    bar.innerHTML = seasons.map(function(s) {
+      return '<button class="season-btn' + (s.season === currentSeason ? " active" : "") + '" data-se="' + s.season + '">S' + s.season + '</button>';
+    }).join("");
+    
+    $all(".season-btn", bar).forEach(function(b) {
+      b.addEventListener("click", function() {
+        var se = parseInt(b.dataset.se, 10);
+        $all(".season-btn", bar).forEach(function(x) { x.classList.toggle("active", x === b); });
+        renderPlayerEpisodes(se, 1);
+        loadPlayerStream($("#player-video-wrap"), detailState.currentDubPath || detailState.detailPath, se, 1);
+      });
+    });
+    
+    renderPlayerEpisodes(currentSeason, currentEpisode);
+  }
+
+  function renderPlayerEpisodes(season, selectedEp) {
+    var list = $("#player-episode-list");
+    if (!list) return;
+    var seasonInfo = (detailState.seasons.seasons || []).find(function(s) { return s.season === season; });
+    var maxEp = (seasonInfo && seasonInfo.maxEp) || 0;
+    if (!maxEp) { list.innerHTML = ""; return; }
+    
+    var html = "";
+    for (var ep = 1; ep <= Math.min(maxEp, 24); ep++) {
+      html += '<button class="player-ep-btn' + (ep === selectedEp ? " active" : "") + '" data-se="' + season + '" data-ep="' + ep + '">E' + ep + '</button>';
+    }
+    if (maxEp > 24) {
+      html += '<span class="player-ep-more">+' + (maxEp - 24) + ' more</span>';
+    }
+    list.innerHTML = html;
+    
+    $all(".player-ep-btn", list).forEach(function(b) {
+      b.addEventListener("click", function() {
+        var se = parseInt(b.dataset.se, 10);
+        var ep = parseInt(b.dataset.ep, 10);
+        $all(".player-ep-btn", list).forEach(function(x) { x.classList.toggle("active", x === b); });
+        loadPlayerStream($("#player-video-wrap"), detailState.currentDubPath || detailState.detailPath, se, ep);
+      });
+    });
   }
 
   function loadPlayerStream(wrap, detailPath, season, episode) {
