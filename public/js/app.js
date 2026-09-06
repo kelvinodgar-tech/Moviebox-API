@@ -878,7 +878,7 @@
       +     '<h1 class="player-page-title">' + escapeHtml(info.title || "Untitled") + '</h1>'
       +     '<div class="detail-meta">'
       +       '<span class="type-badge">' + (type === "tv" ? "TV Series" : "Movie") + '</span>'
-      +       (season ? '<span class="pill">S' + season + ' E' + episode + '</span>' : '')
+      +       (season ? '<span class="pill" data-role="se-pill">S' + season + ' E' + episode + '</span>' : '')
       +       '<span class="rating"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27l5.18 3.12-1.4-5.92 4.6-3.98-6.05-.52L12 4.5 9.67 9.97l-6.05.52 4.6 3.98-1.4 5.92z"/></svg>' + rating + '</span>'
       +       (year ? '<span class="pill">' + year + '</span>' : '')
       +       (info.durationText ? '<span class="pill">' + escapeHtml(info.durationText) + '</span>' : '')
@@ -929,16 +929,21 @@
     bar.innerHTML = seasons.map(function(s) {
       return '<button class="season-btn' + (s.season === currentSeason ? " active" : "") + '" data-se="' + s.season + '">S' + s.season + '</button>';
     }).join("");
-    
+
     $all(".season-btn", bar).forEach(function(b) {
       b.addEventListener("click", function() {
         var se = parseInt(b.dataset.se, 10);
         $all(".season-btn", bar).forEach(function(x) { x.classList.toggle("active", x === b); });
         renderPlayerEpisodes(se, 1);
+        // Update the header pill so it reflects the newly-selected season/episode
+        // instead of staying stuck on the initial S1 E1.
+        detailState.currentSeason = se;
+        detailState.currentEpisode = 1;
+        updatePlayerHeaderEpisode(se, 1);
         loadPlayerStream($("#player-video-wrap"), detailState.currentDubPath || detailState.detailPath, se, 1);
       });
     });
-    
+
     renderPlayerEpisodes(currentSeason, currentEpisode);
   }
 
@@ -948,7 +953,7 @@
     var seasonInfo = (detailState.seasons.seasons || []).find(function(s) { return s.season === season; });
     var maxEp = (seasonInfo && seasonInfo.maxEp) || 0;
     if (!maxEp) { list.innerHTML = ""; return; }
-    
+
     var html = "";
     for (var ep = 1; ep <= Math.min(maxEp, 24); ep++) {
       html += '<button class="player-ep-btn' + (ep === selectedEp ? " active" : "") + '" data-se="' + season + '" data-ep="' + ep + '">E' + ep + '</button>';
@@ -957,20 +962,65 @@
       html += '<span class="player-ep-more">+' + (maxEp - 24) + ' more</span>';
     }
     list.innerHTML = html;
-    
+
     $all(".player-ep-btn", list).forEach(function(b) {
       b.addEventListener("click", function() {
         var se = parseInt(b.dataset.se, 10);
         var ep = parseInt(b.dataset.ep, 10);
         $all(".player-ep-btn", list).forEach(function(x) { x.classList.toggle("active", x === b); });
+        // Keep the header pill in sync with the actually-playing episode.
+        detailState.currentSeason = se;
+        detailState.currentEpisode = ep;
+        updatePlayerHeaderEpisode(se, ep);
         loadPlayerStream($("#player-video-wrap"), detailState.currentDubPath || detailState.detailPath, se, ep);
       });
     });
   }
 
-  function loadPlayerStream(wrap, detailPath, season, episode) {
+  // Update the "S{season} E{episode}" pill in the player header. Called
+  // whenever the user picks a different season or episode from the picker
+  // so the header stops showing the initial S1 E1 forever.
+  function updatePlayerHeaderEpisode(season, episode) {
+    var meta = document.querySelector('.player-info-block .detail-meta');
+    if (!meta) return;
+    var existing = meta.querySelector('[data-role="se-pill"]');
+    if (season && episode) {
+      var label = 'S' + season + ' E' + episode;
+      if (existing) {
+        existing.textContent = label;
+      } else {
+        var pill = document.createElement('span');
+        pill.className = 'pill';
+        pill.setAttribute('data-role', 'se-pill');
+        pill.textContent = label;
+        // Insert right after the type-badge so the order matches the initial render.
+        var typeBadge = meta.querySelector('.type-badge');
+        if (typeBadge && typeBadge.nextSibling) {
+          meta.insertBefore(pill, typeBadge.nextSibling);
+        } else {
+          meta.insertBefore(pill, meta.firstChild);
+        }
+      }
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+
+  function loadPlayerStream(wrap, detailPath, season, episode, opts) {
     if (!wrap) return;
     detailState.currentDubPath = detailPath;
+    // Capture the current playback position + playing state BEFORE we wipe the
+    // wrap's innerHTML. Used when switching audio dubs so the new stream can
+    // resume from exactly the same timestamp.
+    var preserveTime = null;
+    var wasPlaying = false;
+    if (opts && opts.preserveTime) {
+      var existingVideo = wrap.querySelector('video');
+      if (existingVideo && existingVideo.currentTime > 0 && isFinite(existingVideo.currentTime)) {
+        preserveTime = existingVideo.currentTime;
+        wasPlaying = !existingVideo.paused;
+      }
+    }
     wrap.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching streams...</div>';
 
     var url = "/api/" + (season ? "tv" : "movie") + "/" + encodeURIComponent(detailPath);
@@ -984,7 +1034,7 @@
         return;
       }
       detailState.currentQuality = best;
-      buildPlayer(wrap, best, season, episode);
+      buildPlayer(wrap, best, season, episode, { preserveTime: preserveTime, wasPlaying: wasPlaying });
       // Pre-fetch captions in the background so the CC menu shows languages quickly.
       fetchCaptions(detailPath, season, episode).then(function () {
         // captions are loaded inside buildPlayer
@@ -1006,10 +1056,15 @@
     });
   }
 
-  function buildPlayer(wrap, quality, season, episode) {
+  function buildPlayer(wrap, quality, season, episode, opts) {
     var info = detailState.info || {};
     var playSrc = streamProxyUrl(quality.url);
     var qualities = detailState.qualities || [];
+    // When switching audio dubs, the parent (loadPlayerStream) captures the
+    // currentTime + playing state of the previous video before wiping the wrap.
+    // We pick it up here so the new stream can resume at the same timestamp.
+    var preserveTime = (opts && opts.preserveTime) ? opts.preserveTime : null;
+    var wasPlayingBeforeSwitch = !!(opts && opts.wasPlaying);
 
     var dubs = (info.dubs || []).filter(function (d) { return d.kind === "dub"; });
     var audioOptions = [];
@@ -1138,7 +1193,10 @@
     var playIcon = '<path d="M8 5v14l11-7z"/>';
     var pauseIcon = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
     var volFull = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/>';
-    var volMute = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.03zM4 18h4l5 5V9.18l-5 5H4V18zM14 3.23v2.06a7 7 0 010 13.42v2.06A9 9 0 0014 3.23z"/><path d="M19 8.5l5 5M24 8.5l-5 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>';
+    // Muted speaker: same horn + waves outline, but with an X drawn INSIDE the
+    // 24x24 viewBox (older version used x=19/24 which overflowed the viewBox
+    // and made the icon look broken).
+    var volMute = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.796 8.796 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>';
 
     function formatTime(s) {
       if (!s || isNaN(s)) return '0:00';
@@ -1252,12 +1310,69 @@
       else if (wrap.requestFullscreen) wrap.requestFullscreen();
     });
 
-    // Progress bar seek
+    // Progress bar seek + drag.
+    // Pointer events give us unified mouse + touch handling. We capture
+    // the pointer so the user can drag past the bar's edges without losing
+    // the drag. While dragging we update a "scrub preview" so the bar
+    // follows the user's finger/cursor in real time, and the time readout
+    // shows the scrubbed position. On release we actually seek the video.
     var progressWrap = wrap.querySelector('#player-progress-wrap');
-    progressWrap.addEventListener('click', function(e) {
-      e.stopPropagation();
+    var progressBar = wrap.querySelector('#player-progress-bar');
+    var progressFilled = wrap.querySelector('#pc-progress-filled');
+    var pcTime = wrap.querySelector('#pc-time');
+    var scrubbing = false;
+    var scrubPct = 0;
+
+    function pctFromEvent(e) {
       var rect = progressWrap.getBoundingClientRect();
-      var pct = (e.clientX - rect.left) / rect.width;
+      var x = (e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0));
+      return Math.max(0, Math.min(1, (x - rect.left) / rect.width));
+    }
+
+    function applyScrubPreview(pct) {
+      scrubPct = pct;
+      if (progressFilled) progressFilled.style.width = (pct * 100) + '%';
+      if (pcTime && duration) {
+        var t = pct * duration;
+        pcTime.textContent = formatTime(t) + ' / ' + formatTime(duration);
+      }
+      progressBar.classList.add('scrubbing');
+    }
+
+    function clearScrubPreview() {
+      progressBar.classList.remove('scrubbing');
+      // The normal timeupdate handler will reset the filled width + time text
+      // on the next tick (it runs ~4x/sec).
+    }
+
+    progressWrap.addEventListener('pointerdown', function(e) {
+      e.stopPropagation();
+      e.preventDefault();
+      scrubbing = true;
+      try { progressWrap.setPointerCapture(e.pointerId); } catch (err) {}
+      applyScrubPreview(pctFromEvent(e));
+    });
+    progressWrap.addEventListener('pointermove', function(e) {
+      if (!scrubbing) return;
+      e.stopPropagation();
+      applyScrubPreview(pctFromEvent(e));
+    });
+    var finishScrub = function(e) {
+      if (!scrubbing) return;
+      scrubbing = false;
+      try { progressWrap.releasePointerCapture(e.pointerId); } catch (err) {}
+      var pct = pctFromEvent(e);
+      if (duration) video.currentTime = pct * duration;
+      clearScrubPreview();
+    };
+    progressWrap.addEventListener('pointerup', finishScrub);
+    progressWrap.addEventListener('pointercancel', finishScrub);
+    // Click handler kept as a fallback for browsers without pointer events
+    // (very rare) - just seeks to the clicked position.
+    progressWrap.addEventListener('click', function(e) {
+      if (scrubbing) return;
+      e.stopPropagation();
+      var pct = pctFromEvent(e);
       if (duration) video.currentTime = pct * duration;
     });
 
@@ -1334,7 +1449,9 @@
       }
       closeAllMenus();
       detailState.currentDubPath = dubPath;
-      loadPlayerStream(wrap, dubPath, season, episode);
+      // Preserve currentTime + playing state across the dub switch so the
+      // user doesn't lose their place in the video.
+      loadPlayerStream(wrap, dubPath, season, episode, { preserveTime: true });
     });
 
     // Playback speed selection (inside the Playback sub-panel)
@@ -1401,27 +1518,55 @@
       });
     }).catch(function() {});
 
-    function loadSubtitle(url) {
+    // Single timeupdate listener for subtitle rendering. Set up ONCE so
+    // switching subtitles doesn't keep stacking new listeners on the video
+    // element. The listener reads from detailState.subtitleCues + activeCaptionUrl
+    // so subtitle switches just update those and the existing listener picks
+    // up the new cues on the next timeupdate tick.
+    video.addEventListener('timeupdate', function() {
       var overlay = wrap.querySelector('#player-overlay');
+      if (!overlay) return;
+      if (!activeCaptionUrl || !detailState.subtitleCues || !detailState.subtitleCues.length) {
+        if (overlay.innerHTML) overlay.innerHTML = '';
+        return;
+      }
+      var t = video.currentTime;
+      var cue = null;
+      for (var i = 0; i < detailState.subtitleCues.length; i++) {
+        if (t >= detailState.subtitleCues[i].start && t <= detailState.subtitleCues[i].end) {
+          cue = detailState.subtitleCues[i];
+          break;
+        }
+      }
+      // Use textContent for the inner span to avoid HTML injection AND to
+      // make sure multi-line cues render as <br> properly.
+      if (cue) {
+        // Preserve line breaks from the SRT (lines separated by \n).
+        var lines = cue.text.split('\n');
+        var html = '';
+        for (var j = 0; j < lines.length; j++) {
+          if (j > 0) html += '<br>';
+          html += '<span class="sub-text">' + escapeHtml(lines[j]) + '</span>';
+        }
+        overlay.innerHTML = html;
+      } else {
+        if (overlay.innerHTML) overlay.innerHTML = '';
+      }
+    });
+
+    function loadSubtitle(url) {
       fetch('/api/stream?url=' + encodeURIComponent(url))
         .then(function(r) { return r.text(); })
         .then(function(srt) {
-          var cues = parseSRT(srt);
-          detailState.subtitleCues = cues;
-          video.addEventListener('timeupdate', function() {
-            if (!activeCaptionUrl || !detailState.subtitleCues) { overlay.innerHTML = ''; return; }
-            var t = video.currentTime;
-            var cue = null;
-            for (var i = 0; i < detailState.subtitleCues.length; i++) {
-              if (t >= detailState.subtitleCues[i].start && t <= detailState.subtitleCues[i].end) {
-                cue = detailState.subtitleCues[i];
-                break;
-              }
-            }
-            overlay.innerHTML = cue ? '<span class="sub-text">' + escapeHtml(cue.text) + '</span>' : '';
-          });
+          detailState.subtitleCues = parseSRT(srt);
+          // activeCaptionUrl is already set by the click handler before calling
+          // loadSubtitle, so the timeupdate listener will start rendering cues
+          // from the next tick.
         })
-        .catch(function() {});
+        .catch(function() {
+          // On fetch error, clear cues so we don't render stale data.
+          detailState.subtitleCues = [];
+        });
     }
 
     function parseSRT(srt) {
@@ -1445,11 +1590,63 @@
     setPlaying(false);
     updateProgress();
 
-    // Autoplay
+    // Autoplay / resume-after-switch.
+    // When switching audio dubs we captured the previous currentTime so the
+    // new stream can jump to the exact same spot. For a fresh load (no
+    // preserveTime), we just autoplay from 0.
     video.addEventListener('canplay', function onCanPlay() {
       video.removeEventListener('canplay', onCanPlay);
-      video.play().catch(function() {});
+      if (preserveTime && isFinite(preserveTime) && preserveTime > 0) {
+        // Wait for metadata so duration is known, then seek.
+        var applySeek = function() {
+          try { video.currentTime = preserveTime; } catch (e) {}
+          if (wasPlayingBeforeSwitch) video.play().catch(function() {});
+        };
+        if (video.readyState >= 1) applySeek();
+        else video.addEventListener('loadedmetadata', applySeek, { once: true });
+      } else {
+        video.play().catch(function() {});
+      }
     });
+
+    // ─── Media Session API ─────────────────────────────────────────────
+    // Shows the title (and S/E for series) in the browser's media notification
+    // (lock screen, media controls, etc.) instead of a generic "MovieBox" label.
+    // We also wire up play/pause action handlers so the notification buttons work.
+    if ('mediaSession' in navigator) {
+      var infoObj = detailState.info || {};
+      var baseTitle = infoObj.title || 'MovieBox';
+      // For TV series, append "S1 E5" so the notification shows exactly which
+      // episode is playing. Movies just show the title.
+      var sessionTitle = season ? (baseTitle + ' - S' + season + ' E' + episode) : baseTitle;
+      var sessionArtist = season ? ('Season ' + season + ' Episode ' + episode) : 'Movie';
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: sessionTitle,
+          artist: sessionArtist,
+          album: 'MovieBox',
+          artwork: infoObj.cover ? [
+            { src: infoObj.cover, sizes: '512x512', type: 'image/jpeg' }
+          ] : []
+        });
+        navigator.mediaSession.setActionHandler('play', function() { video.play().catch(function(){}); });
+        navigator.mediaSession.setActionHandler('pause', function() { video.pause(); });
+        // Report position state so the notification scrubber works.
+        var reportPosition = function() {
+          try {
+            navigator.mediaSession.setPositionState({
+              duration: video.duration || 0,
+              playbackRate: video.playbackRate || 1,
+              position: Math.min(video.currentTime || 0, video.duration || 0)
+            });
+          } catch (e) {}
+        };
+        video.addEventListener('play', reportPosition);
+        video.addEventListener('timeupdate', reportPosition);
+        video.addEventListener('durationchange', reportPosition);
+        if (video.duration) reportPosition();
+      } catch (e) {}
+    }
   }
 
   function renderTrailerWhenVisible(trailerUrl) {

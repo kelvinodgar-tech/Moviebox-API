@@ -2019,15 +2019,30 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
   transition: opacity 0.25s ease;
 }
 .player-progress-wrap {
-  padding: 8px 12px 4px;
+  padding: 10px 12px 6px;
   cursor: pointer;
+  /* Larger hit area so the user can grab the scrubber easily, even on mobile. */
+  touch-action: none;
 }
 .player-progress-bar {
   height: 4px;
   background: rgba(255,255,255,0.2);
   border-radius: 2px;
   position: relative;
-  overflow: hidden;
+  overflow: visible;  /* allow the thumb to stick out above the bar */
+  transition: height 0.15s ease;
+}
+/* While dragging, the bar grows so it's easier to see where you're scrubbing. */
+.player-progress-bar.scrubbing {
+  height: 7px;
+}
+.player-progress-bar::after {
+  /* Invisible 16px-tall hit strip on top of the 4px bar so touch users can
+     actually grab it without pixel-perfect precision. */
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: -8px; bottom: -8px;
 }
 .player-progress-buffered {
   position: absolute;
@@ -2043,13 +2058,36 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
   border-radius: 2px;
   width: 0%;
 }
+/* Visible thumb that sits at the leading edge of the filled portion.
+   Hidden by default, grows in while scrubbing so the user sees what
+   they're grabbing. */
+.player-progress-filled::after {
+  content: '';
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%) scale(0);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #10b84d;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  transition: transform 0.15s ease;
+}
+.player-progress-bar.scrubbing .player-progress-filled::after {
+  transform: translateY(-50%) scale(1.1);
+}
 .player-controls-row {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 4px 8px 8px;
   background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.5) 70%, transparent 100%);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.player-controls-row::-webkit-scrollbar { display: none; }
 .pc-btn {
   background: transparent;
   border: none;
@@ -2063,17 +2101,20 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
   -webkit-tap-highlight-color: transparent;
   min-width: 36px;
   min-height: 36px;
+  flex-shrink: 0;
 }
 .pc-btn:hover { background: rgba(255,255,255,0.1); }
 .pc-btn:active { transform: scale(0.92); }
+.pc-btn svg { display: block; }
 .pc-time {
   color: #fff;
   font-size: 12px;
   font-family: monospace;
   padding: 0 6px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
-.pc-spacer { flex: 1; }
+.pc-spacer { flex: 1 0 auto; min-width: 4px; }
 .pc-menu {
   position: absolute;
   bottom: 52px;
