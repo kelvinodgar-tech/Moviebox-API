@@ -1045,12 +1045,32 @@
       +         '<button class="pc-btn" id="pc-fullscreen" aria-label="Fullscreen"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>'
       +       '</div>'
       +     '</div>'
-      +     '<div class="pc-menu" id="pc-menu-settings">'
-      +       '<div class="pc-menu-section"><div class="pc-menu-title">Quality</div></div>'
-      +       '<div class="pc-menu-section"><div class="pc-menu-title">Audio</div></div>'
+      // Root settings menu: top-level categories. Tapping one opens a sub-panel.
+      +     '<div class="pc-menu pc-menu-root" id="pc-menu-settings">'
+      +       '<button class="pc-menu-item pc-menu-cat" data-panel="quality"><span>Quality</span><span class="pc-val" id="pc-val-quality">Auto</span><svg class="pc-chevron" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6"/></svg></button>'
+      +       '<button class="pc-menu-item pc-menu-cat" data-panel="audio"><span>Audio</span><span class="pc-val" id="pc-val-audio">Original</span><svg class="pc-chevron" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6"/></svg></button>'
+      +       '<button class="pc-menu-item pc-menu-cat" data-panel="subs"><span>Subtitles</span><span class="pc-val" id="pc-val-subs">Off</span><svg class="pc-chevron" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6"/></svg></button>'
+      +       '<button class="pc-menu-item pc-menu-cat" data-panel="playback"><span>Playback</span><span class="pc-val" id="pc-val-playback">1x</span><svg class="pc-chevron" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6"/></svg></button>'
       +     '</div>'
-      +     '<div class="pc-menu" id="pc-menu-subs">'
-      +       '<div class="pc-menu-section"><div class="pc-menu-title">Subtitles</div></div>'
+      // Sub-panel: Quality
+      +     '<div class="pc-menu pc-menu-sub" id="pc-panel-quality">'
+      +       '<button class="pc-menu-back" data-back="root"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 6l-6 6 6 6"/></svg><span>Quality</span></button>'
+      +       '<div class="pc-menu-section"><div class="pc-menu-list" id="pc-list-quality"></div></div>'
+      +     '</div>'
+      // Sub-panel: Audio
+      +     '<div class="pc-menu pc-menu-sub" id="pc-panel-audio">'
+      +       '<button class="pc-menu-back" data-back="root"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 6l-6 6 6 6"/></svg><span>Audio</span></button>'
+      +       '<div class="pc-menu-section"><div class="pc-menu-list" id="pc-list-audio"></div></div>'
+      +     '</div>'
+      // Sub-panel: Subtitles
+      +     '<div class="pc-menu pc-menu-sub" id="pc-panel-subs">'
+      +       '<button class="pc-menu-back" data-back="root"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 6l-6 6 6 6"/></svg><span>Subtitles</span></button>'
+      +       '<div class="pc-menu-section"><div class="pc-menu-list" id="pc-list-subs"></div></div>'
+      +     '</div>'
+      // Sub-panel: Playback speed
+      +     '<div class="pc-menu pc-menu-sub" id="pc-panel-playback">'
+      +       '<button class="pc-menu-back" data-back="root"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 6l-6 6 6 6"/></svg><span>Playback speed</span></button>'
+      +       '<div class="pc-menu-section"><div class="pc-menu-list" id="pc-list-playback"></div></div>'
       +     '</div>'
       + '</div>';
 
@@ -1060,31 +1080,49 @@
     if (!video) return;
     video.src = playSrc;
 
-    // Build quality buttons
-    var settingsMenu = wrap.querySelector('#pc-menu-settings');
-    if (!settingsMenu) return;
-    var qualitySection = settingsMenu.querySelector('.pc-menu-section');
-    if (!qualitySection) return;
+    // ─── Build quality list (inside the Quality sub-panel) ──────────────
+    var qualityList = wrap.querySelector('#pc-list-quality');
     freeQualities.forEach(function(q) {
       var btn = document.createElement('button');
       btn.className = 'pc-menu-item' + (q.resolution === quality.resolution ? ' active' : '');
       btn.setAttribute('data-res', q.resolution);
       btn.innerHTML = '<span>' + q.resolution + 'P</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
-      qualitySection.appendChild(btn);
+      qualityList.appendChild(btn);
     });
+    // Initial root value label for Quality
+    var qVal = wrap.querySelector('#pc-val-quality');
+    if (qVal) qVal.textContent = quality.resolution ? (quality.resolution + 'P') : 'Auto';
 
-    // Build audio buttons
-    var audioSection = document.createElement('div');
-    audioSection.className = 'pc-menu-section';
-    audioSection.innerHTML = '<div class="pc-menu-title">Audio</div>';
+    // ─── Build audio list (inside the Audio sub-panel) ──────────────────
+    var audioList = wrap.querySelector('#pc-list-audio');
+    // Default: original audio is active (currentDubPath is unset → matches the
+    // entry whose detailPath equals detailState.detailPath or whose original=true).
+    var activeDubPath = detailState.currentDubPath || detailState.detailPath;
     audioOptions.forEach(function(a) {
       var btn = document.createElement('button');
-      btn.className = 'pc-menu-item' + (a.active !== false ? ' active' : '');
+      var isActive = (a.detailPath === activeDubPath) || (!detailState.currentDubPath && a.original);
+      btn.className = 'pc-menu-item' + (isActive ? ' active' : '');
       btn.setAttribute('data-dub', a.detailPath || '');
       btn.innerHTML = '<span>' + escapeHtml(a.label) + (a.original ? ' <span class="pc-tag">ORIG</span>' : '') + '</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
-      audioSection.appendChild(btn);
+      audioList.appendChild(btn);
     });
-    settingsMenu.appendChild(audioSection);
+    var aVal = wrap.querySelector('#pc-val-audio');
+    if (aVal) {
+      var activeAudio = audioOptions.find(function(a) { return (a.detailPath === activeDubPath) || (!detailState.currentDubPath && a.original); });
+      aVal.textContent = activeAudio ? (activeAudio.original ? 'Original' : activeAudio.label) : 'Original';
+    }
+
+    // ─── Build playback speed list ──────────────────────────────────────
+    var playbackList = wrap.querySelector('#pc-list-playback');
+    var playbackSpeeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+    var currentPlaybackRate = 1;
+    playbackSpeeds.forEach(function(r) {
+      var btn = document.createElement('button');
+      btn.className = 'pc-menu-item' + (r === 1 ? ' active' : '');
+      btn.setAttribute('data-rate', String(r));
+      btn.innerHTML = '<span>' + (r === 1 ? 'Normal' : (r + 'x')) + '</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+      playbackList.appendChild(btn);
+    });
 
     // State
     var isPlaying = false;
@@ -1149,18 +1187,40 @@
       }
     }
 
+    function closeAllMenus() {
+      wrap.querySelectorAll('.pc-menu').forEach(function(m) { m.classList.remove('open'); });
+    }
+
+    // Open the settings root menu (shows the category list).
+    function openSettingsRoot() {
+      closeAllMenus();
+      var root = wrap.querySelector('#pc-menu-settings');
+      if (root) root.classList.add('open');
+    }
+
+    // Open a specific sub-panel (Quality / Audio / Subtitles / Playback).
+    // Hides the root menu and shows only the requested sub-panel.
+    function openSubPanel(name) {
+      closeAllMenus();
+      var panel = wrap.querySelector('#pc-panel-' + name);
+      if (panel) panel.classList.add('open');
+    }
+
+    // Backwards-compatible toggle used by the dedicated subtitles button
+    // and the gear icon. If the menu is already open and the user taps the
+    // gear again, close everything.
     function toggleMenu(menu) {
-      var settings = wrap.querySelector('#pc-menu-settings');
-      var subs = wrap.querySelector('#pc-menu-subs');
       if (menu === 'settings') {
-        subs.classList.remove('open');
-        settings.classList.toggle('open');
+        var root = wrap.querySelector('#pc-menu-settings');
+        if (root.classList.contains('open')) closeAllMenus();
+        else openSettingsRoot();
       } else if (menu === 'subs') {
-        settings.classList.remove('open');
-        subs.classList.toggle('open');
+        // Dedicated subtitles button: jump straight to the subs sub-panel.
+        var subsPanel = wrap.querySelector('#pc-panel-subs');
+        if (subsPanel.classList.contains('open')) closeAllMenus();
+        else openSubPanel('subs');
       } else {
-        settings.classList.remove('open');
-        subs.classList.remove('open');
+        closeAllMenus();
       }
     }
 
@@ -1209,8 +1269,28 @@
       else showControls();
     });
 
-    // Quality selection
-    settingsMenu.addEventListener('click', function(e) {
+    // Root menu: tapping a category opens its sub-panel
+    var settingsRoot = wrap.querySelector('#pc-menu-settings');
+    settingsRoot.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var cat = e.target.closest('.pc-menu-cat');
+      if (!cat) return;
+      var panel = cat.getAttribute('data-panel');
+      if (panel) openSubPanel(panel);
+    });
+
+    // Back button on any sub-panel → returns to the root menu
+    wrap.querySelectorAll('.pc-menu-back').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        openSettingsRoot();
+      });
+    });
+
+    // Quality selection (inside the Quality sub-panel)
+    var qualityPanel = wrap.querySelector('#pc-panel-quality');
+    qualityPanel.addEventListener('click', function(e) {
+      e.stopPropagation();
       var btn = e.target.closest('[data-res]');
       if (!btn) return;
       var res = parseInt(btn.getAttribute('data-res'));
@@ -1224,59 +1304,93 @@
         video.currentTime = t;
         if (wasPlaying) video.play().catch(function(){});
       });
-      settingsMenu.querySelectorAll('[data-res]').forEach(function(b) { b.classList.toggle('active', b === btn); });
-      toggleMenu('close');
+      qualityPanel.querySelectorAll('[data-res]').forEach(function(b) { b.classList.toggle('active', b === btn); });
+      // Update the root menu's Quality value label
+      var qVal = wrap.querySelector('#pc-val-quality');
+      if (qVal) qVal.textContent = q.resolution + 'P';
+      closeAllMenus();
     });
 
-    // Audio selection
-    settingsMenu.addEventListener('click', function(e) {
+    // Audio selection (inside the Audio sub-panel)
+    var audioPanel = wrap.querySelector('#pc-panel-audio');
+    audioPanel.addEventListener('click', function(e) {
+      e.stopPropagation();
       var btn = e.target.closest('[data-dub]');
       if (!btn) return;
       var dubPath = btn.getAttribute('data-dub');
-      if (!dubPath || dubPath === (detailState.currentDubPath || detailState.detailPath)) { toggleMenu('close'); return; }
-      toggleMenu('close');
+      if (!dubPath || dubPath === (detailState.currentDubPath || detailState.detailPath)) { closeAllMenus(); return; }
+      // Update active state on audio buttons + root value label BEFORE reload
+      audioPanel.querySelectorAll('[data-dub]').forEach(function(b) { b.classList.toggle('active', b === btn); });
+      var aVal = wrap.querySelector('#pc-val-audio');
+      if (aVal) {
+        var lbl = btn.querySelector('span');
+        // Strip the ORIG tag if present
+        if (lbl) {
+          var clone = lbl.cloneNode(true);
+          var tag = clone.querySelector('.pc-tag');
+          if (tag) tag.remove();
+          aVal.textContent = (clone.textContent || '').trim() || 'Original';
+        }
+      }
+      closeAllMenus();
       detailState.currentDubPath = dubPath;
       loadPlayerStream(wrap, dubPath, season, episode);
     });
 
+    // Playback speed selection (inside the Playback sub-panel)
+    var playbackPanel = wrap.querySelector('#pc-panel-playback');
+    playbackPanel.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var btn = e.target.closest('[data-rate]');
+      if (!btn) return;
+      var rate = parseFloat(btn.getAttribute('data-rate'));
+      if (!isFinite(rate)) return;
+      video.playbackRate = rate;
+      currentPlaybackRate = rate;
+      playbackPanel.querySelectorAll('[data-rate]').forEach(function(b) { b.classList.toggle('active', b === btn); });
+      var pVal = wrap.querySelector('#pc-val-playback');
+      if (pVal) pVal.textContent = rate === 1 ? '1x' : (rate + 'x');
+      closeAllMenus();
+    });
+
     // Click outside menus closes them
     document.addEventListener('click', function(e) {
-      if (!e.target.closest('#pc-menu-settings') && !e.target.closest('#pc-settings')) {
-        wrap.querySelector('#pc-menu-settings').classList.remove('open');
-      }
-      if (!e.target.closest('#pc-menu-subs') && !e.target.closest('#pc-subtitles')) {
-        wrap.querySelector('#pc-menu-subs').classList.remove('open');
+      if (!e.target.closest('.pc-menu') && !e.target.closest('#pc-settings') && !e.target.closest('#pc-subtitles')) {
+        closeAllMenus();
       }
     });
 
-    // Load captions
+    // Load captions into the Subtitles sub-panel
     fetchCaptions(detailState.currentDubPath || detailState.detailPath, season, episode).then(function(caps) {
       captionsData = caps || [];
-      var subsMenu = wrap.querySelector('#pc-menu-subs');
-      var subsSection = subsMenu.querySelector('.pc-menu-section');
-      // Clear and rebuild
-      subsSection.innerHTML = '<div class="pc-menu-title">Subtitles</div>';
+      var subsList = wrap.querySelector('#pc-list-subs');
+      if (!subsList) return;
+      subsList.innerHTML = '';
       var offBtn = document.createElement('button');
       offBtn.className = 'pc-menu-item active';
       offBtn.setAttribute('data-cap', '');
       offBtn.innerHTML = '<span>Off</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
-      subsSection.appendChild(offBtn);
+      subsList.appendChild(offBtn);
       captionsData.forEach(function(cap) {
         var btn = document.createElement('button');
         btn.className = 'pc-menu-item';
         btn.setAttribute('data-cap', cap.url);
         btn.setAttribute('data-lan', cap.lanName || cap.lanCode || '');
         btn.innerHTML = '<span>' + escapeHtml(cap.lanName || cap.lanCode || 'Unknown') + '</span><svg class="pc-check" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
-        subsSection.appendChild(btn);
+        subsList.appendChild(btn);
       });
 
-      // Subtitle selection
-      subsMenu.addEventListener('click', function(e) {
+      // Subtitle selection (inside the Subtitles sub-panel)
+      subsList.addEventListener('click', function(e) {
+        e.stopPropagation();
         var btn = e.target.closest('[data-cap]');
         if (!btn) return;
         var capUrl = btn.getAttribute('data-cap');
-        subsMenu.querySelectorAll('[data-cap]').forEach(function(b) { b.classList.toggle('active', b === btn); });
-        toggleMenu('close');
+        subsList.querySelectorAll('[data-cap]').forEach(function(b) { b.classList.toggle('active', b === btn); });
+        // Update the root menu's Subtitles value label
+        var sVal = wrap.querySelector('#pc-val-subs');
+        if (sVal) sVal.textContent = capUrl ? (btn.getAttribute('data-lan') || 'On') : 'Off';
+        closeAllMenus();
         if (!capUrl) {
           activeCaptionUrl = null;
           wrap.querySelector('#player-overlay').innerHTML = '';
