@@ -1,17 +1,23 @@
 // GET /api/browse?type=movie&genre=Action&country=United+States&year=2024&sort=Latest&page=1&limit=20
-// Browse/filter movies, TV shows, and animation with genre, country, year, sort filters.
-// Uses the backend /subject/filter endpoint and filters by subjectType on our side.
+// Browse/filter movies, TV shows, and animation.
+// Uses the backend /subject/filter endpoint, auto-paginating to find enough items of the requested type.
 
 const API = "https://h5-api.aoneroom.com";
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
-// subjectType mapping: 1=movie, 2=TV, 6=music/other
-// For "animation" we filter by genre containing "Animation"
 const TYPE_MAP = {
   movie: [1],
   tv: [2],
-  animation: [1, 2], // animation can be either, filtered by genre
-  all: [1, 2, 6],
+  animation: [1, 2],
+  all: [1, 2, 5, 6, 7, 9],
+};
+
+// Best sort option per type (based on what the backend returns)
+const SORT_HINT = {
+  movie: "Latest",
+  tv: "ForYou",
+  animation: "Latest",
+  all: "Latest",
 };
 
 function norm(s) {
@@ -39,55 +45,29 @@ export default async function handler(req, res) {
   const genre = req.query.genre || "";
   const country = req.query.country || "";
   const year = req.query.year || "";
-  const sort = req.query.sort || "Latest";
+  let sort = req.query.sort || "";
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
+
+  // Use the best sort for the requested type if user didn't specify
+  if (!sort) sort = SORT_HINT[type] || "Latest";
 
   const allowedTypes = TYPE_MAP[type] || TYPE_MAP.all;
   const isAnimation = type === "animation";
 
   try {
-    // Build the filter request body
-    const filterBody = { page, perPage: limit * 3, sort }; // fetch 3x to have enough after filtering
-    if (genre) filterBody.genre = genre;
-    if (country) filterBody.country = country;
-    if (year) filterBody.year = year;
-
-    const r = await fetch(`${API}/wefeed-h5api-bff/subject/filter`, {
-      method: "POST",
-      headers: {
-        "User-Agent": UA,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-        "Origin": "https://netnaija.film",
-        "Referer": "https://netnaija.film/",
-      },
-      body: JSON.stringify(filterBody),
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!r.ok) {
-      return res.status(r.status).json({ error: `Backend returned ${r.status}` });
-    }
-
-    const data = await r.json();
-    let items = (data.data?.items || []).map(norm);
-
-    // Filter by subjectType
-    items = items.filter(s => s && allowedTypes.includes(s.subjectType));
-
-    // For animation, also filter by genre containing "Animation"
-    if (isAnimation) {
-      items = items.filter(s => (s.genre || "").toLowerCase().includes("animation"));
-    }
-
-    // If we don't have enough items after filtering, try fetching more pages
+    const results = [];
+    const seen = new Set();
     let currentPage = page;
-    while (items.length < limit && currentPage < 5) {
-      currentPage++;
-      filterBody.page = currentPage;
-      const r2 = await fetch(`${API}/wefeed-h5api-bff/subject/filter`, {
+    const maxPages = page + 5; // search up to 5 pages
+
+    while (results.length < limit && currentPage <= maxPages) {
+      const filterBody = { page: currentPage, perPage: 30, sort };
+      if (genre) filterBody.genre = genre;
+      if (country) filterBody.country = country;
+      if (year) filterBody.year = year;
+
+      const r = await fetch(`${API}/wefeed-h5api-bff/subject/filter`, {
         method: "POST",
         headers: {
           "User-Agent": UA,
@@ -100,18 +80,24 @@ export default async function handler(req, res) {
         body: JSON.stringify(filterBody),
         signal: AbortSignal.timeout(10000),
       });
-      if (!r2.ok) break;
-      const data2 = await r2.json();
-      const moreItems = (data2.data?.items || []).map(norm);
-      const filtered = moreItems.filter(s => s && allowedTypes.includes(s.subjectType));
-      if (isAnimation) {
-        filtered.filter(s => (s.genre || "").toLowerCase().includes("animation"));
-      }
-      items = items.concat(filtered);
-      if (moreItems.length === 0) break;
-    }
 
-    items = items.slice(0, limit);
+      if (!r.ok) break;
+      const data = await r.json();
+      const items = data.data?.items || [];
+      if (items.length === 0) break;
+
+      for (const s of items) {
+        const n = norm(s);
+        if (!n || !n.title || seen.has(n.subjectId)) continue;
+        if (!allowedTypes.includes(n.subjectType)) continue;
+        if (isAnimation && !(n.genre || "").toLowerCase().includes("animation")) continue;
+        seen.add(n.subjectId);
+        results.push(n);
+        if (results.length >= limit) break;
+      }
+
+      currentPage++;
+    }
 
     res.status(200).json({
       type,
@@ -120,8 +106,8 @@ export default async function handler(req, res) {
       year: year || "All",
       sort,
       page,
-      count: items.length,
-      results: items,
+      count: results.length,
+      results: results.slice(0, limit),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
