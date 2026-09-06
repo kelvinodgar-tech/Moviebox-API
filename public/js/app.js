@@ -987,7 +987,7 @@
       buildPlayer(wrap, best, season, episode);
       // Pre-fetch captions in the background so the CC menu shows languages quickly.
       fetchCaptions(detailPath, season, episode).then(function () {
-        if (detailState.playerInstance) detailState.playerInstance.refreshCaptions();
+        // captions are loaded inside buildPlayer
       }).catch(function () {});
     }).catch(function (e) {
       wrap.innerHTML = '<div class="error-box">Failed to load stream: ' + escapeHtml(e.message) + '</div>';
@@ -1059,12 +1059,15 @@
 
     wrap.innerHTML = html;
 
-    var video = document.getElementById('plyr-video');
+    var video = wrap.querySelector('video');
+    if (!video) return;
     video.src = playSrc;
 
     // Build quality buttons
-    var settingsMenu = document.getElementById('pc-menu-settings');
+    var settingsMenu = wrap.querySelector('#pc-menu-settings');
+    if (!settingsMenu) return;
     var qualitySection = settingsMenu.querySelector('.pc-menu-section');
+    if (!qualitySection) return;
     freeQualities.forEach(function(q) {
       var btn = document.createElement('button');
       btn.className = 'pc-menu-item' + (q.resolution === quality.resolution ? ' active' : '');
@@ -1111,22 +1114,22 @@
 
     function setPlaying(playing) {
       isPlaying = playing;
-      document.getElementById('pc-play-icon').innerHTML = playing ? pauseIcon : playIcon;
+      wrap.querySelector('#pc-play-icon').innerHTML = playing ? pauseIcon : playIcon;
     }
 
     function updateProgress() {
       currentTime = video.currentTime || 0;
       duration = video.duration || 0;
       var pct = duration ? (currentTime / duration * 100) : 0;
-      document.getElementById('pc-progress-filled').style.width = pct + '%';
-      document.getElementById('pc-time').textContent = formatTime(currentTime) + ' / ' + formatTime(duration);
+      wrap.querySelector('#pc-progress-filled').style.width = pct + '%';
+      wrap.querySelector('#pc-time').textContent = formatTime(currentTime) + ' / ' + formatTime(duration);
     }
 
     function updateBuffered() {
       if (video.buffered && video.buffered.length > 0) {
         var end = video.buffered.end(video.buffered.length - 1);
         var pct = duration ? (end / duration * 100) : 0;
-        document.getElementById('pc-progress-buffered').style.width = pct + '%';
+        wrap.querySelector('#pc-progress-buffered').style.width = pct + '%';
       }
     }
 
@@ -1137,8 +1140,8 @@
 
     function setControlsVisible(visible) {
       controlsVisible = visible;
-      document.getElementById('player-controls').style.opacity = visible ? '1' : '0';
-      document.getElementById('player-controls').style.pointerEvents = visible ? 'auto' : 'none';
+      wrap.querySelector('#player-controls').style.opacity = visible ? '1' : '0';
+      wrap.querySelector('#player-controls').style.pointerEvents = visible ? 'auto' : 'none';
     }
 
     function showControls() {
@@ -1150,8 +1153,8 @@
     }
 
     function toggleMenu(menu) {
-      var settings = document.getElementById('pc-menu-settings');
-      var subs = document.getElementById('pc-menu-subs');
+      var settings = wrap.querySelector('#pc-menu-settings');
+      var subs = wrap.querySelector('#pc-menu-subs');
       if (menu === 'settings') {
         subs.classList.remove('open');
         settings.classList.toggle('open');
@@ -1171,21 +1174,21 @@
     video.addEventListener('progress', updateBuffered);
     video.addEventListener('loadedmetadata', updateProgress);
     video.addEventListener('volumechange', function() {
-      document.getElementById('pc-volume-icon').innerHTML = (video.muted || video.volume === 0) ? volMute : volFull;
+      wrap.querySelector('#pc-volume-icon').innerHTML = (video.muted || video.volume === 0) ? volMute : volFull;
     });
 
     // Controls
-    document.getElementById('pc-play').addEventListener('click', function(e) { e.stopPropagation(); togglePlay(); });
-    document.getElementById('pc-rewind').addEventListener('click', function(e) { e.stopPropagation(); video.currentTime = Math.max(0, video.currentTime - 10); });
-    document.getElementById('pc-forward').addEventListener('click', function(e) { e.stopPropagation(); video.currentTime = Math.min(video.duration || 0, video.currentTime + 10); });
-    document.getElementById('pc-volume').addEventListener('click', function(e) {
+    wrap.querySelector('#pc-play').addEventListener('click', function(e) { e.stopPropagation(); togglePlay(); });
+    wrap.querySelector('#pc-rewind').addEventListener('click', function(e) { e.stopPropagation(); video.currentTime = Math.max(0, video.currentTime - 10); });
+    wrap.querySelector('#pc-forward').addEventListener('click', function(e) { e.stopPropagation(); video.currentTime = Math.min(video.duration || 0, video.currentTime + 10); });
+    wrap.querySelector('#pc-volume').addEventListener('click', function(e) {
       e.stopPropagation();
       if (video.muted || video.volume === 0) { video.muted = false; video.volume = 1; }
       else { video.muted = true; }
     });
-    document.getElementById('pc-subtitles').addEventListener('click', function(e) { e.stopPropagation(); toggleMenu('subs'); });
-    document.getElementById('pc-settings').addEventListener('click', function(e) { e.stopPropagation(); toggleMenu('settings'); });
-    document.getElementById('pc-fullscreen').addEventListener('click', function(e) {
+    wrap.querySelector('#pc-subtitles').addEventListener('click', function(e) { e.stopPropagation(); toggleMenu('subs'); });
+    wrap.querySelector('#pc-settings').addEventListener('click', function(e) { e.stopPropagation(); toggleMenu('settings'); });
+    wrap.querySelector('#pc-fullscreen').addEventListener('click', function(e) {
       e.stopPropagation();
       var wrap = document.querySelector('.player-video-wrap');
       if (document.fullscreenElement) document.exitFullscreen();
@@ -1193,7 +1196,7 @@
     });
 
     // Progress bar seek
-    var progressWrap = document.getElementById('player-progress-wrap');
+    var progressWrap = wrap.querySelector('#player-progress-wrap');
     progressWrap.addEventListener('click', function(e) {
       e.stopPropagation();
       var rect = progressWrap.getBoundingClientRect();
@@ -1242,17 +1245,17 @@
     // Click outside menus closes them
     document.addEventListener('click', function(e) {
       if (!e.target.closest('#pc-menu-settings') && !e.target.closest('#pc-settings')) {
-        document.getElementById('pc-menu-settings').classList.remove('open');
+        wrap.querySelector('#pc-menu-settings').classList.remove('open');
       }
       if (!e.target.closest('#pc-menu-subs') && !e.target.closest('#pc-subtitles')) {
-        document.getElementById('pc-menu-subs').classList.remove('open');
+        wrap.querySelector('#pc-menu-subs').classList.remove('open');
       }
     });
 
     // Load captions
     fetchCaptions(detailState.currentDubPath || detailState.detailPath, season, episode).then(function(caps) {
       captionsData = caps || [];
-      var subsMenu = document.getElementById('pc-menu-subs');
+      var subsMenu = wrap.querySelector('#pc-menu-subs');
       var subsSection = subsMenu.querySelector('.pc-menu-section');
       // Clear and rebuild
       subsSection.innerHTML = '<div class="pc-menu-title">Subtitles</div>';
@@ -1279,7 +1282,7 @@
         toggleMenu('close');
         if (!capUrl) {
           activeCaptionUrl = null;
-          document.getElementById('player-overlay').innerHTML = '';
+          wrap.querySelector('#player-overlay').innerHTML = '';
           return;
         }
         activeCaptionUrl = capUrl;
@@ -1288,7 +1291,7 @@
     }).catch(function() {});
 
     function loadSubtitle(url) {
-      var overlay = document.getElementById('player-overlay');
+      var overlay = wrap.querySelector('#player-overlay');
       fetch('/api/stream?url=' + encodeURIComponent(url))
         .then(function(r) { return r.text(); })
         .then(function(srt) {
@@ -1327,7 +1330,7 @@
     }
 
     // Initial state
-    document.getElementById('pc-volume-icon').innerHTML = volFull;
+    wrap.querySelector('#pc-volume-icon').innerHTML = volFull;
     setPlaying(false);
     updateProgress();
 
