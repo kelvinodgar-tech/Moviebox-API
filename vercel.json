@@ -19,6 +19,10 @@
     {
       "source": "/api/captions/:detailPath",
       "destination": "/api/captions?detailPath=:detailPath"
+    },
+    {
+      "source": "/((?!api/|css/|js/|moviebox_scraper\\.py|index\\.html|detail\\.html|search\\.html|player\\.html|404\\.html|og-image).*)",
+      "destination": "/404.html"
     }
   ],
   "headers": [

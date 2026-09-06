@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 - Not Found | MovieBox</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2310b84d'/><path d='M12 9v14l11-7z' fill='white'/></svg>">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#0f0f0f;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px}
+    .err-wrap{max-width:400px}
+    .err-code{font-size:80px;font-weight:800;color:#10b84d;line-height:1;margin-bottom:8px}
+    .err-msg{font-size:18px;color:#888;margin-bottom:28px}
+    .err-btn{display:inline-block;background:#10b84d;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;transition:all .2s}
+    .err-btn:hover{background:#0da449;transform:translateY(-1px)}
+    .err-icon{margin-bottom:20px;opacity:.4}
+  </style>
+</head>
+<body>
+  <div class="err-wrap">
+    <div class="err-icon">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#10b84d" stroke-width="1.5">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M9 9l6 6M15 9l-6 6"/>
+      </svg>
+    </div>
+    <div class="err-code">404</div>
+    <div class="err-msg">This page doesn't exist or has been moved.</div>
+    <a href="/" class="err-btn">Back to Home</a>
+  </div>
+</body>
+</html>
