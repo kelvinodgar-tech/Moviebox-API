@@ -48,11 +48,15 @@
         },
         {
           "key": "Access-Control-Allow-Methods",
-          "value": "GET, OPTIONS"
+          "value": "GET, HEAD, OPTIONS"
         },
         {
           "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type"
+          "value": "Content-Type, Range"
+        },
+        {
+          "key": "Access-Control-Expose-Headers",
+          "value": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition"
         }
       ]
     }
