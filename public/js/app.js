@@ -1007,7 +1007,6 @@
   }
 
   function buildPlayer(wrap, quality, season, episode) {
-    try {
     var info = detailState.info || {};
     var playSrc = streamProxyUrl(quality.url);
     var qualities = detailState.qualities || [];
@@ -1030,8 +1029,8 @@
       +     '<div class="player-controls" id="player-controls">'
       +       '<div class="player-progress-wrap" id="player-progress-wrap">'
       +         '<div class="player-progress-bar" id="player-progress-bar">'
-      +           '<div class="player-progress-buffered" id="player-progress-buffered"></div>'
-      +           '<div class="player-progress-filled" id="player-progress-filled"></div>'
+      +           '<div class="player-progress-buffered" id="pc-progress-buffered"></div>'
+      +           '<div class="player-progress-filled" id="pc-progress-filled"></div>'
       +         '</div>'
       +       '</div>'
       +       '<div class="player-controls-row">'
@@ -1337,10 +1336,6 @@
       video.removeEventListener('canplay', onCanPlay);
       video.play().catch(function() {});
     });
-    } catch(e) {
-      console.error('buildPlayer error:', e.message, e.stack);
-      if (wrap) wrap.innerHTML = '<div class="error-box">Player error: ' + e.message + '</div>';
-    }
   }
 
   function renderTrailerWhenVisible(trailerUrl) {
