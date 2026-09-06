@@ -1007,6 +1007,7 @@
   }
 
   function buildPlayer(wrap, quality, season, episode) {
+    try {
     var info = detailState.info || {};
     var playSrc = streamProxyUrl(quality.url);
     var qualities = detailState.qualities || [];
@@ -1336,6 +1337,10 @@
       video.removeEventListener('canplay', onCanPlay);
       video.play().catch(function() {});
     });
+    } catch(e) {
+      console.error('buildPlayer error:', e.message, e.stack);
+      if (wrap) wrap.innerHTML = '<div class="error-box">Player error: ' + e.message + '</div>';
+    }
   }
 
   function renderTrailerWhenVisible(trailerUrl) {
