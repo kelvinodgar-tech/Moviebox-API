@@ -1022,10 +1022,8 @@
 
     var freeQualities = qualities.filter(function(q) { return q.url && !q.vipLocked; });
 
-    // Build the player HTML
+    // Build the player HTML (wrap IS the .player-video-wrap, so put content directly inside)
     var html = ''
-      + '<div class="player-container">'
-      +   '<div class="player-video-wrap">'
       +     '<video id="plyr-video" playsinline crossorigin preload="metadata"></video>'
       +     '<div class="player-overlay" id="player-overlay"></div>'
       +     '<div class="player-controls" id="player-controls">'
@@ -1054,7 +1052,6 @@
       +     '<div class="pc-menu" id="pc-menu-subs">'
       +       '<div class="pc-menu-section"><div class="pc-menu-title">Subtitles</div></div>'
       +     '</div>'
-      +   '</div>'
       + '</div>';
 
     wrap.innerHTML = html;
