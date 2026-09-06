@@ -2081,12 +2081,17 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
   background: rgba(15,15,15,0.97);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 10px;
-  min-width: 180px;
-  max-height: 280px;
+  min-width: 200px;
+  max-height: 320px;
   overflow-y: auto;
   z-index: 10;
   display: none;
   box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  animation: pc-menu-in 0.16s ease-out;
+}
+@keyframes pc-menu-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .pc-menu.open { display: block; }
 .pc-menu-section { padding: 4px 0; }
@@ -2117,6 +2122,51 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
 .pc-menu-item.active { color: #10b84d; }
 .pc-menu-item.active .pc-check { opacity: 1; }
 .pc-check { width: 16px; height: 16px; opacity: 0; flex-shrink: 0; }
+
+/* Root menu category rows: "Quality", "Audio", "Subtitles", "Playback".
+   Each shows a left label, a right-aligned current-value label, and a
+   chevron pointing into the sub-panel. */
+.pc-menu-cat .pc-val {
+  color: #888;
+  font-size: 12px;
+  margin-right: 6px;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-menu-cat:hover .pc-val { color: #ccc; }
+.pc-chevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: #666;
+}
+.pc-menu-cat:hover .pc-chevron { color: #ccc; }
+
+/* Back button at the top of every sub-panel. Sticky so it stays visible
+   when the sub-panel scrolls. */
+.pc-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: rgba(255,255,255,0.04);
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  color: #ddd;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.pc-menu-back:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.pc-menu-back svg { flex-shrink: 0; }
+.pc-menu-list { padding: 2px 0; }
 .pc-tag {
   display: inline-block;
   background: #10b84d;
@@ -2131,7 +2181,8 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
 @media (max-width: 767px) {
   .pc-btn { padding: 6px; min-width: 34px; min-height: 34px; }
   .pc-time { font-size: 11px; padding: 0 4px; }
-  .pc-menu { min-width: 160px; right: 4px; bottom: 48px; }
+  .pc-menu { min-width: 180px; right: 4px; bottom: 48px; }
   .player-overlay { bottom: 60px; }
   .sub-text { font-size: 13px; }
+  .pc-menu-cat .pc-val { max-width: 80px; }
 }
