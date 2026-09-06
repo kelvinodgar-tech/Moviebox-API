@@ -1749,3 +1749,64 @@ a.lang-chip:hover { border-color: var(--accent); background: var(--accent-soft);
 .download-res { font-size: 15px; }
 .download-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 
+
+/* Detail page visible poster image */
+.detail-cover-img {
+  width: 140px;
+  height: 210px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.5);
+}
+@media (min-width: 768px) {
+  .detail-cover-img {
+    width: 200px;
+    height: 300px;
+    float: left;
+    margin-right: 24px;
+    margin-bottom: 0;
+  }
+}
+
+/* Player page season/episode selector */
+.player-seasons-wrap {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255,255,255,.1);
+}
+.player-season-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+#player-episode-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.player-ep-btn {
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.15);
+  color: #ccc;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.player-ep-btn:hover {
+  background: rgba(16,184,77,.2);
+  border-color: #10b84d;
+}
+.player-ep-btn.active {
+  background: #10b84d;
+  color: #fff;
+  border-color: #10b84d;
+}
+.player-ep-more {
+  color: #666;
+  font-size: 12px;
+  padding: 8px 10px;
+}
