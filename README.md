@@ -99,7 +99,6 @@ and JavaScript (no framework, no build step). Pages:
 | GET | `/api/captions/:detailPath?season=1&episode=1` | Subtitle URLs (one per language) |
 | GET | `/api/stream?url=<encoded-media-url>` | Media proxy: forwards a CDN URL with the required `Referer` header so the browser can play/download MP4s |
 | GET | `/api/download?url=<encoded-media-url>&filename=<name>` | Same as `/api/stream` but also sets `Content-Disposition: attachment; filename="..."` |
-| GET | `/moviebox_scraper.py` | Download the Python scraper |
 
 All endpoints:
 
@@ -610,16 +609,19 @@ curl "https://moviebox-api-eight.vercel.app/api/download?url=<encoded-url>&filen
 
 ## Python Scraper (Local)
 
-You can also run the scraper locally for bulk operations.
+You can also run the scraper locally for bulk operations. It lives in the
+repository at `tools/moviebox_scraper.py` (it is no longer served as a download
+from the hosted site).
 
 ### Quick Start
 
 ```bash
-# Download the scraper
-curl -O https://moviebox-api-eight.vercel.app/moviebox_scraper.py
+# Clone the repo (or just download tools/moviebox_scraper.py from GitHub)
+git clone https://github.com/kelvinodgar-tech/Moviebox-API.git
+cd Moviebox-API
 
 # Run it
-python3 moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o
+python3 tools/moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o
 ```
 
 Requires Python 3.7+. No pip install needed. Uses only the standard library.
@@ -654,33 +656,33 @@ proxy.
 
 ```bash
 # Single movie by detailPath (gets all qualities incl 1080P free)
-python3 moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o
+python3 tools/moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o
 
 # TV show, specific seasons, multiple episodes per season
-python3 moviebox_scraper.py --tv lucifer-UQASHYbVPB2 --seasons 1,2,3 --max-episodes 5
+python3 tools/moviebox_scraper.py --tv lucifer-UQASHYbVPB2 --seasons 1,2,3 --max-episodes 5
 
 # Top N trending movies/shows
-python3 moviebox_scraper.py --trending --limit 10 --max-episodes 2
+python3 tools/moviebox_scraper.py --trending --limit 10 --max-episodes 2
 
 # Search the home page by title
-python3 moviebox_scraper.py --search "all american" --limit 5
+python3 tools/moviebox_scraper.py --search "all american" --limit 5
 
 # Scrape from the full home page (~600 subjects)
-python3 moviebox_scraper.py --home --limit 20
+python3 tools/moviebox_scraper.py --home --limit 20
 
 # Switch which site to impersonate (same backend, different Origin header)
-python3 moviebox_scraper.py --site officialmoviebox --movie oppenheimer-Akh5Nrwl7o
-python3 moviebox_scraper.py --site netnaija --tv lucifer-UQASHYbVPB2
+python3 tools/moviebox_scraper.py --site officialmoviebox --movie oppenheimer-Akh5Nrwl7o
+python3 tools/moviebox_scraper.py --site netnaija --tv lucifer-UQASHYbVPB2
 # (movieboxonline is the default site)
 
 # Increase delay between calls to avoid rate-limiting (default 3 seconds)
-python3 moviebox_scraper.py --trending --limit 20 --delay 5
+python3 tools/moviebox_scraper.py --trending --limit 20 --delay 5
 
 # Save to a custom output path
-python3 moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o --out ~/Downloads/opp.json
+python3 tools/moviebox_scraper.py --movie oppenheimer-Akh5Nrwl7o --out ~/Downloads/opp.json
 
 # Suppress progress output (for cron jobs / pipelines)
-python3 moviebox_scraper.py --trending --limit 10 --quiet --out results.json
+python3 tools/moviebox_scraper.py --trending --limit 10 --quiet --out results.json
 ```
 
 ### Output Format
@@ -871,11 +873,12 @@ Moviebox-API/
 |   |-- index.html             # Homepage (hero, trending, sections)
 |   |-- detail.html            # Movie/TV detail page (inline player, trailer)
 |   |-- search.html            # Search results page
-|   |-- moviebox_scraper.py    # Python scraper (also served at /moviebox_scraper.py)
 |   |-- css/
 |   |   `-- style.css          # Dark theme stylesheet
 |   `-- js/
 |       `-- app.js             # All frontend logic (custom player, SRT parser)
+|-- tools/
+|   `-- moviebox_scraper.py    # Python CLI scraper (repo-only, not deployed)
 |-- vercel.json                # Vercel config (rewrites + headers)
 |-- README.md                  # This file
 `-- .gitignore
@@ -921,7 +924,7 @@ The static website in `public/` works on any static host (GitHub Pages,
 Netlify, S3, Cloudflare Pages, etc.). Just point it at the hosted API URL by
 setting `window.MOVIEBOX_API_BASE`.
 
-The Python scraper (`moviebox_scraper.py`) runs anywhere Python 3.7+ is
+The Python scraper (`tools/moviebox_scraper.py`) runs anywhere Python 3.7+ is
 available. No dependencies needed.
 
 ## License
