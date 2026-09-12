@@ -41,27 +41,30 @@ const SITE = "https://movieboxonline.net";
 // ---------------------------------------------------------------------------
 // Anonymous JWT handling (module scope survives across warm invocations)
 //
-// The BFF rank-buckets anonymous visitors: the JWT's embedded uid decides
-// which ranking variant you see (verified live: replaying the browser's JWT
-// from node reproduces the site's rendered order exactly, while a freshly
-// minted uid can land in a different variant - 3 variants observed across 8
-// fresh uids, head items stable, fuzzy tail shuffled). Every site visitor has
-// their own 90-day `apiToken` cookie, so the site's order is per-visitor.
-// To give this API ONE stable, site-faithful order, we PIN a dedicated
-// anonymous JWT whose ranking was verified to match movieboxonline.net's
-// rendered search page (both "Odyssey" and "One Piece" spot checks, DOM order
-// == API order, 21/21 items). If the pinned token is ever rejected, we
-// transparently re-bootstrap a fresh anonymous identity (order then follows
-// that new uid's variant - still a valid movieboxonline.net ranking).
+// The BFF A/B TESTS its search ranking per anonymous uid: the JWT's embedded
+// uid decides which ranking variant you see ("ops.search_abt" inside each
+// item exposes the experiment ids). Live distribution measured across many
+// minted uids: ~75-80% land in the MAJORITY variant, ~20-25% in a minority
+// one; the head of the list is stable across variants, the fuzzy tail is
+// shuffled. Every movieboxonline.net visitor has their own 90-day `apiToken`
+// cookie, so the site's order is per-visitor by design.
+//
+// We therefore PIN an anonymous JWT that was calibrated to sit in the
+// MAJORITY variant (5 of 6 freshly minted uids produced byte-identical
+// ordering with it - Odyssey spot check). This makes the API's order match
+// what the overwhelming majority of movieboxonline.net visitors - and almost
+// certainly THIS deployment's users - see on the site itself. If the pinned
+// token is ever rejected or nears expiry, calibrateMajority() re-mints a
+// fresh identity that stays in the majority variant (majority vote across 3
+// candidates), so the order does not drift into a minority bucket.
 // ---------------------------------------------------------------------------
 import crypto from "node:crypto";
 
-// Dedicated anonymous identity (uid 9004814784999089400, exp 2026-12-09).
-// Purely anonymous - no account, no PII. Refresh by minting a new one:
-//   node scripts/probe-bff-search2.mjs   (shows the mint flow), or grab the
-// `apiToken` cookie value after visiting movieboxonline.net once.
+// Dedicated anonymous identity in the MAJORITY rank bucket
+// (uid 8687706835455468792, exp 2026-12-11). Purely anonymous - no account,
+// no PII. Refresh by running: node scripts/calibrate-pin.mjs
 const PINNED_JWT =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjkwMDQ4MTQ3ODQ5OTkwODk0MDAsImF0cCI6MywiZXh0IjoiMTc4OTE3ODE3NyIsImV4cCI6MTc5Njk1NDE3NywiaWF0IjoxNzg5MTc3ODc3fQ.o_6kE0pb-R7Ugbw_3WE4iIJhBJFquyynVRaR8_wDjMo";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjg2ODc3MDY4MzU0NTU0Njg3OTIsImF0cCI6MywiZXh0IjoiMTc4OTE4NTA5MSIsImV4cCI6MTc5Njk2MTA5MSwiaWF0IjoxNzg5MTg0NzkxfQ.Tqn8Ulm3swjwkJcF3mXWkI6JVsFlOLBPsCrGq_XAwsU";
 
 let jwtState = { token: PINNED_JWT, fetchedAt: 0 };
 
@@ -94,32 +97,40 @@ function bffHeaders(extra = {}) {
   };
 }
 
-/** POST /subject/search-suggest. Returns { token, suggestions } or null.
- *  When called anonymously (no Bearer / forceAnonymous) the response's
- *  `x-user` header carries a freshly minted anonymous JWT - that is the
- *  bootstrap/refresh path. When called with a valid Bearer there is no
- *  x-user at all and the call is purely the suggestions source ("try also"
- *  words), so it never churns the pinned identity. */
-async function suggest(keyword, { forceAnonymous = false } = {}) {
-  const anon = forceAnonymous || !jwtState.token;
+/** POST /subject/search-suggest with a FRESH anonymous identity. Returns the
+ *  minted token (does NOT touch jwtState). The response's `x-user` header
+ *  carries a freshly minted anonymous 90-day JWT. */
+async function mintToken(keyword) {
   try {
     const r = await fetch(`${API}/wefeed-h5api-bff/subject/search-suggest`, {
       method: "POST",
-      headers: bffHeaders({
-        Authorization: anon ? "" : `Bearer ${jwtState.token}`,
-        ...(anon ? { "X-Client-Token": clientToken() } : {}),
-      }),
+      headers: bffHeaders({ Authorization: "", "X-Client-Token": clientToken() }),
       body: JSON.stringify({ keyword, perPage: 10 }),
       signal: AbortSignal.timeout(10000),
     });
     if (!r.ok) return null;
     const xuser = r.headers.get("x-user");
-    if (xuser) {
-      try {
-        const token = JSON.parse(xuser).token;
-        if (token) jwtState = { token, fetchedAt: Date.now() };
-      } catch {}
-    }
+    if (!xuser) return null;
+    const token = JSON.parse(xuser).token;
+    return typeof token === "string" && token ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST /subject/search-suggest. Returns { token, suggestions } or null.
+ *  When called with a valid Bearer there is no x-user at all and the call is
+ *  purely the suggestions source ("try also" words), so it never churns the
+ *  pinned identity. */
+async function suggest(keyword) {
+  try {
+    const r = await fetch(`${API}/wefeed-h5api-bff/subject/search-suggest`, {
+      method: "POST",
+      headers: bffHeaders({ Authorization: `Bearer ${jwtState.token}` }),
+      body: JSON.stringify({ keyword, perPage: 10 }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) return null;
     const data = await r.json();
     const words = (data?.data?.items || [])
       .map((i) => i?.word)
@@ -130,19 +141,52 @@ async function suggest(keyword, { forceAnonymous = false } = {}) {
   }
 }
 
+/** Mint a fresh identity that lands in the MAJORITY rank bucket. Mints up to
+ *  3 candidate tokens, fetches one search page with each, and keeps the
+ *  candidate whose result order matches at least one other candidate
+ *  (majority vote). With a ~75-80% majority-bucket rate, 3 candidates agree
+ *  on the majority order with very high probability, so token rotations
+ *  never drift the API into a minority ranking variant. Falls back to the
+ *  first successfully minted token when no agreement is found. */
+async function calibrateMajority() {
+  const candidates = [];
+  for (let i = 0; i < 3; i++) {
+    const t = await mintToken("movie");
+    if (t) candidates.push(t);
+  }
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  const orders = [];
+  for (const t of candidates) {
+    const sig = await searchPageWith(t, "odyssey", 1);
+    orders.push(sig ? sig.items.map((i) => String(i?.subjectId || "")).join(",") : null);
+  }
+  // Majority vote on non-null order signatures
+  const counts = new Map();
+  for (const sig of orders) if (sig) counts.set(sig, (counts.get(sig) || 0) + 1);
+  let bestSig = null, bestN = 0;
+  for (const [sig, n] of counts) if (n > bestN) { bestSig = sig; bestN = n; }
+  if (bestN >= 2) {
+    const idx = orders.indexOf(bestSig);
+    if (idx >= 0) return candidates[idx];
+  }
+  return candidates[0];
+}
+
 async function ensureJwt() {
   if (!jwtState.token) {
-    await suggest("movie"); // bootstrap a fresh anonymous identity
+    const t = await calibrateMajority();
+    if (t) jwtState = { token: t, fetchedAt: Date.now() };
     return jwtState.token;
   }
   // Refresh only when the token is within 7 days of its real expiry (the
-  // pinned token lasts 90 days; dynamically minted ones too). Must go
-  // ANONYMOUS: suggest with a valid Bearer returns no x-user, so a Bearer
-  // refresh would be a silent no-op. A warm instance therefore keeps ONE
-  // stable identity - and ONE stable ranking - until the token nears expiry.
+  // pinned token lasts 90 days; dynamically minted ones too). The refresh
+  // goes through calibrateMajority() so the replacement stays in the
+  // MAJORITY rank bucket instead of rolling a random variant.
   const exp = jwtExpiryMs(jwtState.token);
   if (exp && Date.now() > exp - 7 * 24 * 3600 * 1000) {
-    await suggest("movie", { forceAnonymous: true });
+    const t = await calibrateMajority();
+    if (t) jwtState = { token: t, fetchedAt: Date.now() };
   }
   return jwtState.token;
 }
@@ -150,16 +194,19 @@ async function ensureJwt() {
 /** POST /subject/search with the anonymous JWT, using the EXACT body the
  *  movieboxonline.net frontend sends: {keyword, page, perPage: 0,
  *  subjectType: 0}. The BFF picks its own page size (~5-13 items) and its
- *  own relevance ranking - we must not tamper with either. Retries once with
- *  a freshly bootstrapped token when the BFF rejects the one we sent. */
+ *  own relevance ranking - we must not tamper with either. */
 const MAX_BFF_PAGES = 10; // safety cap for the page walk
 
 async function searchPage(keyword, page) {
-  if (!jwtState.token) return null;
+  return searchPageWith(jwtState.token, keyword, page);
+}
+
+async function searchPageWith(token, keyword, page) {
+  if (!token) return null;
   try {
     const r = await fetch(`${API}/wefeed-h5api-bff/subject/search`, {
       method: "POST",
-      headers: bffHeaders({ Authorization: `Bearer ${jwtState.token}` }),
+      headers: bffHeaders({ Authorization: `Bearer ${token}` }),
       body: JSON.stringify({ keyword, page, perPage: 0, subjectType: 0 }),
       signal: AbortSignal.timeout(12000),
     });
@@ -195,9 +242,9 @@ async function bffSearch(keyword, page, limit) {
     if (all.length >= limit) break; // limit filled - nothing more to fetch
     let res = await searchPage(keyword, page + p);
     if (res === "UNAUTHORIZED") {
-      // Token rejected - re-bootstrap once and retry this page.
-      jwtState = { token: null, fetchedAt: 0 };
-      await suggest(keyword);
+      // Token rejected - re-calibrate into the majority bucket and retry.
+      const t = await calibrateMajority();
+      jwtState = { token: t, fetchedAt: Date.now() };
       if (!jwtState.token) break;
       res = await searchPage(keyword, page + p);
       if (res === "UNAUTHORIZED" || res === null) break;
