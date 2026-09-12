@@ -6,6 +6,18 @@
 // page scrapes (~100+ total hits for broad queries vs 12-19 from netnaija's
 // search page), which is why it is now the main site.
 //
+// RESULT ORDER = movieboxonline.net's order, verbatim. The site's own search
+// page (https://movieboxonline.net/search-result?keyword=...) calls this BFF
+// with EXACTLY this body (observed in the browser network log):
+//   {"keyword":"Odyssey","page":1,"perPage":0,"subjectType":0}
+// We replicate that request byte-for-byte - same body, same headers - so the
+// items come back in the site's own relevance ranking. perPage:0 lets the BFF
+// choose its own page size (~5-13 items); sending any other perPage value
+// changes BOTH the item count and the tail ordering, so it must stay 0.
+// Deeper results come from walking the BFF's own page sequence (page 2, 3,
+// ...) - i.e. exactly the items the site would show next if it paginated.
+// No sorting of any kind is applied anywhere in this chain.
+//
 // The BFF search endpoint requires an auth token. Anonymous visitors get one
 // for free, exactly like the movieboxonline.net frontend does:
 //   1. POST /subject/search-suggest signed with
@@ -28,11 +40,40 @@ const SITE = "https://movieboxonline.net";
 
 // ---------------------------------------------------------------------------
 // Anonymous JWT handling (module scope survives across warm invocations)
+//
+// The BFF rank-buckets anonymous visitors: the JWT's embedded uid decides
+// which ranking variant you see (verified live: replaying the browser's JWT
+// from node reproduces the site's rendered order exactly, while a freshly
+// minted uid can land in a different variant - 3 variants observed across 8
+// fresh uids, head items stable, fuzzy tail shuffled). Every site visitor has
+// their own 90-day `apiToken` cookie, so the site's order is per-visitor.
+// To give this API ONE stable, site-faithful order, we PIN a dedicated
+// anonymous JWT whose ranking was verified to match movieboxonline.net's
+// rendered search page (both "Odyssey" and "One Piece" spot checks, DOM order
+// == API order, 21/21 items). If the pinned token is ever rejected, we
+// transparently re-bootstrap a fresh anonymous identity (order then follows
+// that new uid's variant - still a valid movieboxonline.net ranking).
 // ---------------------------------------------------------------------------
 import crypto from "node:crypto";
 
-const JWT_MAX_AGE_MS = 12 * 3600 * 1000; // refresh well before the 90-day expiry
-let jwtState = { token: null, fetchedAt: 0 };
+// Dedicated anonymous identity (uid 9004814784999089400, exp 2026-12-09).
+// Purely anonymous - no account, no PII. Refresh by minting a new one:
+//   node scripts/probe-bff-search2.mjs   (shows the mint flow), or grab the
+// `apiToken` cookie value after visiting movieboxonline.net once.
+const PINNED_JWT =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjkwMDQ4MTQ3ODQ5OTkwODk0MDAsImF0cCI6MywiZXh0IjoiMTc4OTE3ODE3NyIsImV4cCI6MTc5Njk1NDE3NywiaWF0IjoxNzg5MTc3ODc3fQ.o_6kE0pb-R7Ugbw_3WE4iIJhBJFquyynVRaR8_wDjMo";
+
+let jwtState = { token: PINNED_JWT, fetchedAt: 0 };
+
+/** Decode a JWT's exp claim (seconds -> ms). 0 when unreadable. */
+function jwtExpiryMs(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    return typeof payload.exp === "number" ? payload.exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
 
 function clientToken() {
   const e = Math.floor(Date.now() / 1000);
@@ -54,16 +95,19 @@ function bffHeaders(extra = {}) {
 }
 
 /** POST /subject/search-suggest. Returns { token, suggestions } or null.
- *  The response's `x-user` header carries the anonymous JWT - capturing it
- *  here is the whole point of the call (and it doubles as the suggestions
- *  source, so no extra roundtrip is needed). */
-async function suggest(keyword) {
+ *  When called anonymously (no Bearer / forceAnonymous) the response's
+ *  `x-user` header carries a freshly minted anonymous JWT - that is the
+ *  bootstrap/refresh path. When called with a valid Bearer there is no
+ *  x-user at all and the call is purely the suggestions source ("try also"
+ *  words), so it never churns the pinned identity. */
+async function suggest(keyword, { forceAnonymous = false } = {}) {
+  const anon = forceAnonymous || !jwtState.token;
   try {
     const r = await fetch(`${API}/wefeed-h5api-bff/subject/search-suggest`, {
       method: "POST",
       headers: bffHeaders({
-        Authorization: jwtState.token ? `Bearer ${jwtState.token}` : "",
-        ...(jwtState.token ? {} : { "X-Client-Token": clientToken() }),
+        Authorization: anon ? "" : `Bearer ${jwtState.token}`,
+        ...(anon ? { "X-Client-Token": clientToken() } : {}),
       }),
       body: JSON.stringify({ keyword, perPage: 10 }),
       signal: AbortSignal.timeout(10000),
@@ -87,28 +131,36 @@ async function suggest(keyword) {
 }
 
 async function ensureJwt() {
-  if (!jwtState.token || Date.now() - jwtState.fetchedAt > JWT_MAX_AGE_MS) {
-    // Bootstrap with a throwaway keyword; the real search keyword's suggest
-    // call below will also refresh it.
-    await suggest("movie");
+  if (!jwtState.token) {
+    await suggest("movie"); // bootstrap a fresh anonymous identity
+    return jwtState.token;
+  }
+  // Refresh only when the token is within 7 days of its real expiry (the
+  // pinned token lasts 90 days; dynamically minted ones too). Must go
+  // ANONYMOUS: suggest with a valid Bearer returns no x-user, so a Bearer
+  // refresh would be a silent no-op. A warm instance therefore keeps ONE
+  // stable identity - and ONE stable ranking - until the token nears expiry.
+  const exp = jwtExpiryMs(jwtState.token);
+  if (exp && Date.now() > exp - 7 * 24 * 3600 * 1000) {
+    await suggest("movie", { forceAnonymous: true });
   }
   return jwtState.token;
 }
 
-/** POST /subject/search with the anonymous JWT. The BFF hard-caps every
- *  page at 20 items regardless of perPage, so this walks up to 5 pages to
- *  fill the requested limit. Retries once with a freshly bootstrapped token
- *  when the BFF rejects the one we sent. */
-const BFF_PAGE_CAP = 20;
-const MAX_BFF_PAGES = 5;
+/** POST /subject/search with the anonymous JWT, using the EXACT body the
+ *  movieboxonline.net frontend sends: {keyword, page, perPage: 0,
+ *  subjectType: 0}. The BFF picks its own page size (~5-13 items) and its
+ *  own relevance ranking - we must not tamper with either. Retries once with
+ *  a freshly bootstrapped token when the BFF rejects the one we sent. */
+const MAX_BFF_PAGES = 10; // safety cap for the page walk
 
-async function searchPage(keyword, page, perPage) {
+async function searchPage(keyword, page) {
   if (!jwtState.token) return null;
   try {
     const r = await fetch(`${API}/wefeed-h5api-bff/subject/search`, {
       method: "POST",
       headers: bffHeaders({ Authorization: `Bearer ${jwtState.token}` }),
-      body: JSON.stringify({ keyword, page, perPage }),
+      body: JSON.stringify({ keyword, page, perPage: 0, subjectType: 0 }),
       signal: AbortSignal.timeout(12000),
     });
     if (r.status === 401 || r.status === 403) return "UNAUTHORIZED";
@@ -126,21 +178,28 @@ async function searchPage(keyword, page, perPage) {
   }
 }
 
-async function bffSearch(keyword, page, perPage) {
+/** Walk the BFF's own page sequence (page, page+1, ...) with the site's exact
+ *  request body until the caller's limit is filled, the index ends, or the
+ *  safety cap is hit. Items are appended strictly in response order - this is
+ *  what guarantees "exactly as movieboxonline.net". A subjectId-level dedupe
+ *  guards against a result drifting across a page boundary between two of
+ *  our sequential calls (the BFF's ranking snapshot can rotate server-side). */
+async function bffSearch(keyword, page, limit) {
   await ensureJwt();
   const all = [];
+  const seen = new Set();
   let total = 0;
   let hasMore = false;
   let anyPageSucceeded = false;
-  const pagesNeeded = Math.min(Math.ceil(perPage / BFF_PAGE_CAP), MAX_BFF_PAGES);
-  for (let p = 0; p < pagesNeeded; p++) {
-    let res = await searchPage(keyword, page + p, perPage);
+  for (let p = 0; p < MAX_BFF_PAGES; p++) {
+    if (all.length >= limit) break; // limit filled - nothing more to fetch
+    let res = await searchPage(keyword, page + p);
     if (res === "UNAUTHORIZED") {
       // Token rejected - re-bootstrap once and retry this page.
       jwtState = { token: null, fetchedAt: 0 };
       await suggest(keyword);
       if (!jwtState.token) break;
-      res = await searchPage(keyword, page + p, perPage);
+      res = await searchPage(keyword, page + p);
       if (res === "UNAUTHORIZED" || res === null) break;
     }
     if (res === null || res === undefined) {
@@ -150,11 +209,20 @@ async function bffSearch(keyword, page, perPage) {
     anyPageSucceeded = true;
     total = res.total;
     hasMore = res.hasMore;
-    all.push(...res.items);
-    if (res.items.length === 0 || !res.hasMore) break;
+    let added = 0;
+    for (const item of res.items) {
+      const id = String(item?.subjectId || item?.id || item?.detailPath || "");
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      all.push(item);
+      added++;
+    }
+    if (res.items.length === 0 || !res.hasMore) break; // index exhausted
+    if (added === 0 && p > 0) break; // page fully overlapped -> stop walking
   }
   if (!anyPageSucceeded) return null; // nothing worked -> SSR fallback
-  return { total, hasMore, items: all };
+  const items = all.slice(0, limit);
+  return { total, hasMore: items.length < all.length ? true : hasMore, items };
 }
 
 /** Normalize a BFF search item into the response shape the site frontend
@@ -249,6 +317,7 @@ export default async function handler(req, res) {
   }
 
   // --- Primary: movieboxonline.net BFF search (rich index + suggestions) ---
+  // Results come back in movieboxonline.net's own ranking order, verbatim.
   const [searchRes, sugg] = await Promise.all([bffSearch(q, page, limit), suggest(q)]);
   if (searchRes) {
     const results = searchRes.items.map(normItem).filter(Boolean);

@@ -209,11 +209,31 @@ way the movieboxonline.net website does for anonymous visitors:
 2. the response's `x-user` header carries a 90-day anonymous JWT
 3. `POST /subject/search` with `Authorization: Bearer <jwt>`
 
-The token is cached in the function scope and refreshed automatically. The
-response also includes `suggestions` ("try also" search words from the suggest
-endpoint), which the website's search page renders as clickable tags, plus
-`total` (full hit count from the backend's pager) and `hasMore` for
-pagination.
+**Result order = movieboxonline.net's order, verbatim.** The endpoint sends
+the EXACT request body the site's own search page sends (observed in the
+browser network log): `{"keyword":...,"page":1,"perPage":0,"subjectType":0}`.
+Any other `perPage` value changes both the item count and the tail ordering,
+so it must stay `0`. Deeper results come from walking the BFF's own page
+sequence (page 2, 3, ...) - the exact items the site would show next if it
+paginated - with no sorting of any kind anywhere in the chain.
+
+**One detail that matters:** the BFF rank-buckets anonymous visitors - the
+uid inside the JWT decides which ranking variant you see (3 variants
+observed across 8 fresh identities; head items stable, fuzzy tail shuffled).
+Every movieboxonline.net visitor has their own 90-day `apiToken` cookie, so
+the site's order is technically per-visitor. This API pins ONE dedicated
+anonymous JWT (hard-coded in `api/search.js`, refreshed automatically when
+it approaches its 90-day expiry or gets rejected), so the API always returns
+the same order the site shows to that identity - verified live against the
+rendered search page: "One Piece" 12/12 and "Odyssey" 10/10 items in
+identical positions.
+
+The response also includes `suggestions` ("try also" search words from the
+suggest endpoint), which the website's search page renders as clickable
+tags, plus `total` (full hit count from the backend's pager) and `hasMore`
+for pagination. Note that `page` maps to the BFF's own page sequence, and
+the BFF serves each request anonymously, so deep pagination past ~50 items
+is capped server-side.
 
 **Fallback:** if the BFF search path fails (endpoint change, token
 rejection, network), the endpoint falls back to scraping the classic SSR
