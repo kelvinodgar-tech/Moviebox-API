@@ -23,23 +23,6 @@
   ],
   "headers": [
     {
-      "source": "/moviebox_scraper.py",
-      "headers": [
-        {
-          "key": "Content-Type",
-          "value": "text/x-python"
-        },
-        {
-          "key": "Content-Disposition",
-          "value": "attachment; filename=\"moviebox_scraper.py\""
-        },
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        }
-      ]
-    },
-    {
       "source": "/api/(.*)",
       "headers": [
         {
