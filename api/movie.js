@@ -26,8 +26,8 @@ export default async function handler(req, res) {
         "User-Agent": UA,
         "Accept": "application/json",
         "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-        "Origin": "https://netnaija.film",
-        "Referer": "https://netnaija.film/",
+        "Origin": "https://movieboxonline.net",
+        "Referer": "https://movieboxonline.net/",
       },
     });
     const detail = await detailResp.json();
@@ -43,8 +43,8 @@ export default async function handler(req, res) {
         "User-Agent": UA,
         "Accept": "application/json",
         "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-        "Origin": "https://netnaija.film",
-        "Referer": `https://netnaija.film/videoPlayPage/${detailPath}?type=/movie/detail`,
+        "Origin": "https://movieboxonline.net",
+        "Referer": `https://movieboxonline.net/play/${detailPath}`,
       },
     });
     const play = await playResp.json();
@@ -53,13 +53,13 @@ export default async function handler(req, res) {
 
     // 3. Fallback to download endpoint if play returns empty (rate-limited)
     if (streams.length === 0) {
-      const dlResp = await fetch(`https://netnaija.film/wefeed-h5api-bff/subject/download?subjectId=${subject.subjectId}&se=0&ep=0&detailPath=${encodeURIComponent(detailPath)}`, {
+      const dlResp = await fetch(`https://movieboxonline.net/wefeed-h5api-bff/subject/download?subjectId=${subject.subjectId}&se=0&ep=0&detailPath=${encodeURIComponent(detailPath)}`, {
         headers: {
           "User-Agent": UA,
           "Accept": "application/json",
           "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-          "Origin": "https://netnaija.film",
-          "Referer": `https://netnaija.film/videoPlayPage/${detailPath}?type=/movie/detail`,
+          "Origin": "https://movieboxonline.net",
+          "Referer": `https://movieboxonline.net/play/${detailPath}`,
         },
       });
       const dl = await dlResp.json();
@@ -84,7 +84,7 @@ export default async function handler(req, res) {
       title: subject.title,
       subjectId: subject.subjectId,
       detailPath,
-      watch_url: `https://netnaija.film/videoPlayPage/${detailPath}?type=/movie/detail`,
+      watch_url: `https://movieboxonline.net/play/${detailPath}`,
       source,
       qualities,
       best_free: qualities.filter(q => q.url && !q.vipLocked).sort((a, b) => b.resolution - a.resolution)[0] || null,

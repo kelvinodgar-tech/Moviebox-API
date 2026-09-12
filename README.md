@@ -4,11 +4,13 @@ A Python scraper, a hosted JSON API, and a complete dark-themed streaming and
 download website backed by the MovieBox streaming backend
 (`h5-api.aoneroom.com`) that powers three sites:
 
+- **movieboxonline.net** (the main site - richest search index)
 - **netnaija.film**
-- **movieboxonline.net**
 - **officialmoviebox.com**
 
-All three sites share the same backend. The scraper and API fetch direct MP4
+All three sites share the same backend. **The scraper and API primarily target
+movieboxonline.net** (its search backend returns 5-10x more results than the
+old SSR page scrapes). They fetch direct MP4
 URLs for movies and TV shows in all available qualities (360P, 480P, 720P,
 1080P). The website is a full streaming app: hero banners, trending list,
 search with relevance ranking, detail pages with cast, season/episode
@@ -189,52 +191,58 @@ Response:
 
 ---
 
-### GET /api/search?q=...&limit=20
+### GET /api/search?q=...&limit=50&page=1
 
-Searches movies and TV shows by title. This endpoint scrapes the actual
-search-result pages on the three sites that share the MovieBox backend:
+Searches movies and TV shows by title.
 
-- `https://netnaija.film/search-result?keyword=...`
-- `https://officialmoviebox.com/newWeb/searchResult?keyword=...`
-- `https://movieboxonline.net/search-result?keyword=...`
+**Primary source: movieboxonline.net's own search backend.** The endpoint
+calls the shared BFF `POST /wefeed-h5api-bff/subject/search` - the exact same
+API movieboxonline.net's frontend uses. That index is dramatically richer
+than the old SSR page scrapes: broad queries return 80-130+ total hits vs
+12-19 from scraping search-result pages.
 
-Each site renders its results inside a Nuxt `__NUXT_DATA__` JSON blob. The
-handler parses that blob, follows the typed-array references to reconstruct
-the full subject objects (title, cover, rating, genre, country, etc), and
-de-duplicates them by `subjectId`. Results from all three sites are merged.
+The BFF search requires an auth token, which the endpoint obtains exactly the
+way the movieboxonline.net website does for anonymous visitors:
 
-The merged results are then ranked by relevance to the query:
+1. `POST /subject/search-suggest` signed with
+   `X-Client-Token: <unix-seconds>,<md5(reverse(unix-seconds-string))>`
+2. the response's `x-user` header carries a 90-day anonymous JWT
+3. `POST /subject/search` with `Authorization: Bearer <jwt>`
 
-1. Exact title match (case-insensitive)
-2. Title starts with the query (case-insensitive)
-3. Title contains the query as a substring
-4. Partial/fuzzy: every whitespace-separated query token appears somewhere
-   in the title
-5. Other matches
+The token is cached in the function scope and refreshed automatically. The
+response also includes `suggestions` ("try also" search words from the suggest
+endpoint), which the website's search page renders as clickable tags, plus
+`total` (full hit count from the backend's pager) and `hasMore` for
+pagination.
 
-Within the same tier, results are secondarily sorted by IMDB rating so the
-better title wins ties. For example, searching `Bridgerton` puts
-`Bridgerton S1-S4` (starts-with match) ahead of
-`Queen Charlotte: A Bridgerton Story` (contains match).
+**Fallback:** if the BFF search path fails (endpoint change, token
+rejection, network), the endpoint falls back to scraping the classic SSR
+search pages (`netnaija.film` first - movieboxonline's own SSR page renders 0
+items - then officialmoviebox.com, then movieboxonline.net), parsing the
+`__NUXT_DATA__` blob the same way as before.
 
 ```bash
-curl "https://moviebox-api-eight.vercel.app/api/search?q=bridgeton&limit=10"
+curl "https://moviebox-api-eight.vercel.app/api/search?q=one+piece&limit=50"
 ```
 
 Response:
 
 ```json
 {
-  "query": "bridgeton",
-  "count": 5,
-  "total": 5,
+  "query": "one piece",
+  "count": 50,
+  "total": 99,
+  "page": 1,
+  "hasMore": true,
+  "source": "movieboxonline",
+  "suggestions": ["one piece red", "one piece film"],
   "results": [
     {
-      "title": "Bridgerton S1-S4",
+      "title": "One Piece",
       "subjectId": "...",
       "subjectType": 2,
       "type": "tv",
-      "detailPath": "bridgerton-...",
+      "detailPath": "one-piece-...",
       "description": "...",
       "releaseDate": "...",
       "genre": "...",
@@ -390,7 +398,7 @@ Response:
   "title": "Oppenheimer",
   "subjectId": "326494254824573768",
   "detailPath": "oppenheimer-Akh5Nrwl7o",
-  "watch_url": "https://netnaija.film/videoPlayPage/oppenheimer-Akh5Nrwl7o?type=/movie/detail",
+  "watch_url": "https://movieboxonline.net/play/oppenheimer-Akh5Nrwl7o",
   "source": "play",
   "qualities": [
     {
@@ -432,7 +440,7 @@ Response:
   "available_seasons": [
     { "season": 1, "maxEp": 13, "resolutions": [360, 480, 720, 1080] }
   ],
-  "watch_url": "https://netnaija.film/videoPlayPage/...",
+  "watch_url": "https://movieboxonline.net/play/...",
   "source": "play",
   "qualities": [
     { "resolution": 360, "size_mb": 117.21, "vipLocked": false, "url": "..." },
@@ -502,7 +510,7 @@ the CC menu swaps the cues; "Off" clears them.
 ### GET /api/stream?url=<encoded-media-url>
 
 Edge-runtime media proxy. The video CDN
-(`bcdnxw.hakunaymatata.com`) requires a `Referer: https://netnaija.film/`
+(`bcdnxw.hakunaymatata.com`) requires a `Referer: https://movieboxonline.net/`
 header on every request and rejects browser and cloud-IP requests without
 it. A browser `<video>` tag cannot set that header for a cross-origin
 resource, so the in-page player and the download buttons route MP4 and SRT
@@ -614,7 +622,7 @@ Returns all qualities but marks 1080P as `vipLocked: true` with an empty URL.
 More reliable for bulk scraping.
 
 - Must be called via the site proxy (e.g.
-  `https://netnaija.film/wefeed-h5api-bff/subject/download?...`), NOT directly
+  `https://movieboxonline.net/wefeed-h5api-bff/subject/download?...`), NOT directly
   on `h5-api.aoneroom.com`.
 - Best for: bulk scraping multiple episodes.
 
@@ -642,7 +650,8 @@ python3 moviebox_scraper.py --home --limit 20
 
 # Switch which site to impersonate (same backend, different Origin header)
 python3 moviebox_scraper.py --site officialmoviebox --movie oppenheimer-Akh5Nrwl7o
-python3 moviebox_scraper.py --site movieboxonline --tv lucifer-UQASHYbVPB2
+python3 moviebox_scraper.py --site netnaija --tv lucifer-UQASHYbVPB2
+# (movieboxonline is the default site)
 
 # Increase delay between calls to avoid rate-limiting (default 3 seconds)
 python3 moviebox_scraper.py --trending --limit 20 --delay 5
@@ -665,7 +674,7 @@ The scraper outputs a JSON file with this structure:
     "subjectId": "326494254824573768",
     "subjectType": 1,
     "detailPath": "oppenheimer-Akh5Nrwl7o",
-    "watch_url": "https://netnaija.film/videoPlayPage/oppenheimer-Akh5Nrwl7o?type=/movie/detail",
+    "watch_url": "https://movieboxonline.net/play/oppenheimer-Akh5Nrwl7o",
     "source": "play",
     "qualities": [
       {
@@ -731,9 +740,9 @@ The `detailPath` is a URL-safe slug used by the sites. You can find it by:
    curl "https://moviebox-api-eight.vercel.app/api/home" | jq '.subjects[].detailPath'
    ```
 
-4. **Browse the site manually:** go to `netnaija.film`, find a movie, copy the
+4. **Browse the site manually:** go to `movieboxonline.net`, find a movie, copy the
    last part of the URL:
-   - `https://netnaija.film/movieDetail/oppenheimer-Akh5Nrwl7o`
+   - `https://movieboxonline.net/detail/oppenheimer-Akh5Nrwl7o`
    - `detailPath = oppenheimer-Akh5Nrwl7o`
 
 ## Important Notes
@@ -790,12 +799,13 @@ Video files are served from `bcdnxw.hakunaymatata.com`. Subtitles from
 
 | Site | Origin | Route prefix |
 |------|--------|--------------|
+| movieboxonline.net (default) | `https://movieboxonline.net` | `/detail/<detailPath>` (play: `/play/<detailPath>`) |
 | netnaija.film | `https://netnaija.film` | `/movieDetail/<detailPath>` |
-| movieboxonline.net | `https://movieboxonline.net` | `/detail/<detailPath>` |
 | officialmoviebox.com | `https://officialmoviebox.com` | `/moviesDetail/<detailPath>` |
 
 All three share the same backend (`h5-api.aoneroom.com`). The `--site` flag
-just changes the `Origin` and `Referer` headers.
+just changes the `Origin` and `Referer` headers. The API endpoints and the
+Python scraper default to movieboxonline.net.
 
 ## Deployment
 
