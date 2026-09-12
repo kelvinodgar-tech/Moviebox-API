@@ -479,10 +479,13 @@
         }
       }
 
-      renderGrid(grid, results);
-
+      // Search page renders ALL results the API returns (the richer
+      // movieboxonline.net search index regularly returns 50+ hits, so the
+      // 20-card section cap must not apply here).
       if (results.length === 0) {
         grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 21l-4.35-4.35M11 19a8 8 0 110-16 8 8 0 010 16z"/></svg><div>No titles found for "' + escapeHtml(searchState.q) + '". Try a different keyword.</div></div>';
+      } else {
+        grid.innerHTML = results.map(cardHTML).join("");
       }
       searchState.loading = false;
     }).catch(function (e) {

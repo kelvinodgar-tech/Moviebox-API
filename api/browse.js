@@ -29,7 +29,7 @@ export default async function handler(req, res) {
   // If ?filters=true, return available filter values
   if (req.query.filters === "true") {
     try {
-      const r = await fetch("https://netnaija.film/movies", {
+      const r = await fetch("https://movieboxonline.net/film", {
         headers: { "User-Agent": UA, "Accept": "text/html" },
         signal: AbortSignal.timeout(12000),
       });
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
         headers: {
           "User-Agent": UA, "Accept": "application/json", "Content-Type": "application/json",
           "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-          "Origin": "https://netnaija.film", "Referer": "https://netnaija.film/",
+          "Origin": "https://movieboxonline.net", "Referer": "https://movieboxonline.net/",
         },
         body: JSON.stringify(filterBody),
         signal: AbortSignal.timeout(10000),
