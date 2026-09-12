@@ -97,6 +97,7 @@ and JavaScript (no framework, no build step). Pages:
 | GET | `/api/movie/:detailPath` | Movie stream/download URLs |
 | GET | `/api/tv/:detailPath?season=1&episode=1` | TV episode stream/download URLs |
 | GET | `/api/captions/:detailPath?season=1&episode=1` | Subtitle URLs (one per language) |
+| GET | `/api/episode-matrix/:detailPath?season=1&episode=1` | Composite for integrators: the full language matrix for one episode - one entry per dub variant (Original Audio + every language dub, each with its own qualities incl. sizes) plus the AGGREGATED subtitle set (captions unioned across variants, deduped per language, richest set wins). `ttlHint` advertises how long the returned CDN URLs stay valid (7200s conservative; measured: video sign URLs live for hours, caption CloudFront URLs for 7 days). Movies: omit season/episode |
 | GET | `/api/stream?url=<encoded-media-url>` | Media proxy: forwards a CDN URL with the required `Referer` header so the browser can play/download MP4s |
 | GET | `/api/download?url=<encoded-media-url>&filename=<name>` | Same as `/api/stream` but also sets `Content-Disposition: attachment; filename="..."` |
 
