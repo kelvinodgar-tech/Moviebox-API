@@ -124,7 +124,25 @@ export default async function handler(req, res) {
   // 1 = subtitle-language variant) and `original` (true = Original Audio).
   // We keep type 0 only - hardsubbed releases (type 1) are skipped; the
   // aggregated soft captions cover those languages.
-  const dubs = (subject.dubs || []).filter((d) => d.type === 0 && d.detailPath);
+  //
+  // EMPTY-dubs fallback: some entries (movies especially - e.g. "Josée")
+  // have NO dub variants at all while the streams live on the MAIN subject.
+  // We then treat the main subject itself as ONE unnamed Original Audio
+  // variant (moviebox's anime catalog is Japanese-first, so claiming
+  // original/Japanese is the safe default) - otherwise the matrix would
+  // return zero languages and AniDen would show neither the Ryuu server
+  // nor any download rows for the title.
+  const dubsRaw = (subject.dubs || []).filter((d) => d.type === 0 && d.detailPath);
+  const dubs = dubsRaw.length > 0
+    ? dubsRaw
+    : [{
+        subjectId: String(subject.subjectId),
+        lanName: "",
+        lanCode: "",
+        original: true,
+        type: 0,
+        detailPath,
+      }];
   const seasons = detail.data?.data?.resource?.seasons || [];
   const seasonInfo = seasons.length > 0
     ? seasons.find((s) => s.se === season) || null
