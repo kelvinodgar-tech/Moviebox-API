@@ -12,8 +12,8 @@ function commonHeaders(referer) {
     "User-Agent": UA,
     Accept: "application/json",
     "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-    Origin: "https://netnaija.film",
-    Referer: referer || "https://netnaija.film/",
+    Origin: "https://movieboxonline.net",
+    Referer: referer || "https://movieboxonline.net/",
   };
 }
 
@@ -51,8 +51,8 @@ export default async function handler(req, res) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
-    const resp = await fetch(`${API}/wefeed-h5api-bff/home?host=netnaija.film`, {
-      headers: commonHeaders("https://netnaija.film/"),
+    const resp = await fetch(`${API}/wefeed-h5api-bff/home?host=movieboxonline.net`, {
+      headers: commonHeaders("https://movieboxonline.net/"),
       signal: controller.signal,
     });
     clearTimeout(timeout);

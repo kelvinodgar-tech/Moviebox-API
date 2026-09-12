@@ -14,8 +14,8 @@ function commonHeaders(referer) {
     "User-Agent": UA,
     Accept: "application/json",
     "X-Client-Info": '{"timezone":"Africa/Lagos"}',
-    Origin: "https://netnaija.film",
-    Referer: referer || "https://netnaija.film/",
+    Origin: "https://movieboxonline.net",
+    Referer: referer || "https://movieboxonline.net/",
   };
 }
 
@@ -59,7 +59,7 @@ export default async function handler(req, res) {
     // 1. Get the subject id from /detail
     const detailResp = await fetchJsonWithTimeout(
       `${API}/wefeed-h5api-bff/detail?detailPath=${encodeURIComponent(detailPath)}`,
-      commonHeaders("https://netnaija.film/")
+      commonHeaders("https://movieboxonline.net/")
     );
 
     if (!detailResp.ok || !detailResp.data) {
@@ -76,7 +76,7 @@ export default async function handler(req, res) {
     }
     const subjectId = String(subject.subjectId);
     const title = subject.title || "";
-    const playReferer = `https://netnaija.film/videoPlayPage/${detailPath}?type=/movie/detail`;
+    const playReferer = `https://movieboxonline.net/play/${detailPath}`;
 
     // 2. Get the video id from /subject/play (fallback to /subject/download)
     let videoId = "";
@@ -99,9 +99,9 @@ export default async function handler(req, res) {
     }
 
     if (!videoId) {
-      // Fallback to /download via the netnaija site proxy
+      // Fallback to /download via the movieboxonline site proxy
       const dlResp = await fetchJsonWithTimeout(
-        `https://netnaija.film/wefeed-h5api-bff/subject/download?subjectId=${subjectId}&se=${season}&ep=${episode}&detailPath=${encodeURIComponent(detailPath)}`,
+        `https://movieboxonline.net/wefeed-h5api-bff/subject/download?subjectId=${subjectId}&se=${season}&ep=${episode}&detailPath=${encodeURIComponent(detailPath)}`,
         commonHeaders(playReferer)
       );
       const dlDownloads = dlResp.data?.data?.downloads || [];

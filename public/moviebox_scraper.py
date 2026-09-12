@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-MovieBox / Netnaija / OfficialMovieBox - Full Quality Scraper
-=============================================================
+MovieBox (movieboxonline.net) - Full Quality Scraper
+==================================================
 
 A single-file, dependency-free (stdlib only) scraper for the MovieBox streaming
 backend (h5-api.aoneroom.com) which powers:
+  - https://movieboxonline.net   (default / main site)
   - https://netnaija.film
-  - https://movieboxonline.net
   - https://officialmoviebox.com
 
 All 3 sites share the same backend; the --site flag just changes the Origin/Referer
 headers used for CORS.
 
 IMPORTANT: The MP4 URLs returned by the API require a Referer header
-(Referer: https://netnaija.film/) to download. Without it, the CDN returns
+(Referer: https://movieboxonline.net/) to download. Without it, the CDN returns
 HTTP 429. When using the hosted API at your-project.vercel.app,
 use the /api/stream and /api/download proxy endpoints which inject the
 Referer header server-side.
@@ -115,30 +115,30 @@ def http_get_json(url, origin, referer=None):
         return json.loads(resp.read())
 
 
-def get_trending(per_page=20, page=1, origin="https://netnaija.film"):
+def get_trending(per_page=20, page=1, origin="https://movieboxonline.net"):
     url = f"{API}/wefeed-h5api-bff/subject/trending?page={page}&perPage={per_page}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {}).get("subjectList", []) or r.get("data", [])
 
 
-def get_home(origin="https://netnaija.film"):
+def get_home(origin="https://movieboxonline.net"):
     host = urllib.parse.urlparse(origin).hostname
     url = f"{API}/wefeed-h5api-bff/home?host={host}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {})
 
 
-def get_subject_detail(detail_path, origin="https://netnaija.film"):
+def get_subject_detail(detail_path, origin="https://movieboxonline.net"):
     """Get full details including synopsis, cast, dubs, seasons, trailer."""
     url = f"{API}/wefeed-h5api-bff/detail?detailPath={urllib.parse.quote(detail_path)}"
     r = http_get_json(url, origin=origin)
     return r.get("data", {})
 
 
-def get_play_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netnaija.film"):
+def get_play_qualities(subject_id, detail_path, se=0, ep=0, origin="https://movieboxonline.net"):
     """Get all quality URLs (incl 1080P free) from /subject/play.
     Note: IP-rate-limited (1 success per ~2-3 min).
-    URLs require Referer: https://netnaija.film/ to download."""
+    URLs require Referer: https://movieboxonline.net/ to download."""
     url = (f"{API}/wefeed-h5api-bff/subject/play"
            f"?subjectId={subject_id}&se={se}&ep={ep}&detailPath={urllib.parse.quote(detail_path)}")
     referer = f"{origin}/videoPlayPage/{detail_path}?type=/movie/detail"
@@ -150,10 +150,10 @@ def get_play_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netn
     return [_normalize_stream(s) for s in streams]
 
 
-def get_download_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netnaija.film"):
+def get_download_qualities(subject_id, detail_path, se=0, ep=0, origin="https://movieboxonline.net"):
     """Get quality URLs from /subject/download (via site proxy).
     1080P is vipLocked. More reliable for bulk scraping.
-    URLs require Referer: https://netnaija.film/ to download."""
+    URLs require Referer: https://movieboxonline.net/ to download."""
     path = (f"/wefeed-h5api-bff/subject/download"
             f"?subjectId={subject_id}&se={se}&ep={ep}&detailPath={urllib.parse.quote(detail_path)}")
     url = f"{origin}{path}"
@@ -166,7 +166,7 @@ def get_download_qualities(subject_id, detail_path, se=0, ep=0, origin="https://
     return [_normalize_stream(d) for d in downloads]
 
 
-def get_captions(video_id, subject_id, detail_path, origin="https://netnaija.film"):
+def get_captions(video_id, subject_id, detail_path, origin="https://movieboxonline.net"):
     """Get subtitle URLs (13+ languages). These URLs do NOT need Referer."""
     url = (f"{API}/wefeed-h5api-bff/subject/caption"
            f"?format=MP4&id={video_id}&subjectId={subject_id}&detailPath={urllib.parse.quote(detail_path)}")
@@ -177,7 +177,7 @@ def get_captions(video_id, subject_id, detail_path, origin="https://netnaija.fil
         return []
 
 
-def get_dubs(detail_path, origin="https://netnaija.film"):
+def get_dubs(detail_path, origin="https://movieboxonline.net"):
     """Get alternative audio tracks (dubs). Each dub has its own detailPath."""
     detail = get_subject_detail(detail_path, origin=origin)
     dubs = detail.get("subject", {}).get("dubs", [])
@@ -233,7 +233,7 @@ def extract_all_subjects(home_data):
     return out
 
 
-def fetch_all_qualities(subject_id, detail_path, se=0, ep=0, origin="https://netnaija.film"):
+def fetch_all_qualities(subject_id, detail_path, se=0, ep=0, origin="https://movieboxonline.net"):
     qualities = get_play_qualities(subject_id, detail_path, se=se, ep=ep, origin=origin)
     if qualities:
         return qualities, "play"
@@ -250,7 +250,7 @@ def best_free_quality(qualities):
     return max(free, key=lambda q: q["resolution"])
 
 
-def scrape_movie(subject, origin="https://netnaija.film", verbose=True):
+def scrape_movie(subject, origin="https://movieboxonline.net", verbose=True):
     sid = subject["subjectId"]
     dp = subject["detailPath"]
     title = subject.get("title", "?")
@@ -275,7 +275,7 @@ def scrape_movie(subject, origin="https://netnaija.film", verbose=True):
             "source": source, "qualities": qualities}
 
 
-def scrape_tv(subject, origin="https://netnaija.film", season_filter=None,
+def scrape_tv(subject, origin="https://movieboxonline.net", season_filter=None,
               max_episodes_per_season=2, delay=3.0, verbose=True):
     sid = subject["subjectId"]
     dp = subject["detailPath"]
@@ -344,7 +344,7 @@ def main():
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--max-episodes", type=int, default=2)
     p.add_argument("--delay", type=float, default=3.0)
-    p.add_argument("--site", choices=list(SITES.keys()), default="netnaija")
+    p.add_argument("--site", choices=list(SITES.keys()), default="movieboxonline")
     p.add_argument("--out", default=DEFAULT_OUT)
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
