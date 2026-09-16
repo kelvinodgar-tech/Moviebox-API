@@ -1,7 +1,6 @@
 # Moviebox API
 
-A Python scraper, a hosted JSON API, and a complete dark-themed streaming and
-download website backed by the MovieBox streaming backend
+A Python scraper and a hosted JSON API for the MovieBox streaming backend
 (`h5-api.aoneroom.com`) that powers three sites:
 
 - **movieboxonline.net** (the main site - richest search index)
@@ -12,11 +11,11 @@ All three sites share the same backend. **The scraper and API primarily target
 movieboxonline.net** (its search backend returns 5-10x more results than the
 old SSR page scrapes). They fetch direct MP4
 URLs for movies and TV shows in all available qualities (360P, 480P, 720P,
-1080P). The website is a full streaming app: hero banners, trending list,
-search with relevance ranking, detail pages with cast, season/episode
-selectors with pagination, an HTML5 video player with custom in-player
-controls (quality, subtitles, audio language), inline trailer playback, and
-direct download links.
+1080P). The bundled demo website (`public/`) puts all of it to work: hero
+banners, trending list, search with relevance ranking, detail pages with
+cast, season/episode selectors with pagination, an HTML5 video player with
+custom in-player controls (quality, subtitles, audio language), inline
+trailer playback, and direct download links.
 
 ## Hosted
 
