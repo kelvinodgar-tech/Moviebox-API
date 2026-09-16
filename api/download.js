@@ -12,8 +12,8 @@ const ALLOWED_HOSTS = [
 ];
 
 function sanitizeFilename(name) {
-  // Allow parentheses + apostrophes (AniDen's forced filenames use them:
-  // "AniDen_Kaya_-_chan_Isn't_Scary_S01E001_(ENG)_480P.mp4"). Everything
+  // Allow parentheses + apostrophes (client-supplied filenames use them:
+  // "Kaya_-_chan_Isn't_Scary_S01E001_(ENG)_480P.mp4"). Everything
   // else filesystem-hostile is stripped.
   return (name || "video.mp4").replace(/[^\w.\-()' ]/g, "").substring(0, 160) || "video.mp4";
 }

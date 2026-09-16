@@ -14,9 +14,9 @@ headers used for CORS.
 
 IMPORTANT: The MP4 URLs returned by the API require a Referer header
 (Referer: https://movieboxonline.net/) to download. Without it, the CDN returns
-HTTP 429. When using the hosted API at your-project.vercel.app,
-use the /api/stream and /api/download proxy endpoints which inject the
-Referer header server-side.
+HTTP 429. When using a hosted instance of this API, use the /api/stream
+and /api/download proxy endpoints which inject the Referer header
+server-side.
 
 HOSTED API ENDPOINTS:
   GET /api/trending?limit=10          - trending movies/shows

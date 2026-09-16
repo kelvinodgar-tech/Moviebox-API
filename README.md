@@ -20,8 +20,11 @@ direct download links.
 
 ## Hosted
 
-- **Website:** https://your-project.vercel.app
-- **API base:** https://your-project.vercel.app/api
+There is no shared public instance - deploy your own (see
+[Deploy](#deploy) below). After deploying:
+
+- **Website:** `https://<your-deployment>.vercel.app`
+- **API base:** `https://<your-deployment>.vercel.app/api`
 
 The website is served from `/` (the static files in `public/`). The API is
 served from `/api/*`. Both live on the same Vercel project, so the website
@@ -119,7 +122,7 @@ Returns the full home page content: banners, category sections, and every
 subject found on the page (de-duplicated by `subjectId`).
 
 ```bash
-curl https://your-project.vercel.app/api/home
+curl https://<your-deployment>.vercel.app/api/home
 ```
 
 Response (abbreviated):
@@ -166,7 +169,7 @@ Response (abbreviated):
 ### GET /api/trending?limit=20
 
 ```bash
-curl "https://your-project.vercel.app/api/trending?limit=20"
+curl "https://<your-deployment>.vercel.app/api/trending?limit=20"
 ```
 
 Response:
@@ -242,7 +245,7 @@ items - then officialmoviebox.com, then movieboxonline.net), parsing the
 `__NUXT_DATA__` blob the same way as before.
 
 ```bash
-curl "https://your-project.vercel.app/api/search?q=one+piece&limit=50"
+curl "https://<your-deployment>.vercel.app/api/search?q=one+piece&limit=50"
 ```
 
 Response:
@@ -282,7 +285,7 @@ duration, IMDB rating, country, subtitles, cover, trailer, the full cast/stars
 list, and the `dubs` array (alternative audio + subtitle language tracks).
 
 ```bash
-curl https://your-project.vercel.app/api/details/oppenheimer-Akh5Nrwl7o
+curl https://<your-deployment>.vercel.app/api/details/oppenheimer-Akh5Nrwl7o
 ```
 
 Response:
@@ -368,7 +371,7 @@ Returns all seasons of a TV show with episode counts and the available
 resolutions per season.
 
 ```bash
-curl https://your-project.vercel.app/api/seasons/lucifer-UQASHYbVPB2
+curl https://<your-deployment>.vercel.app/api/seasons/lucifer-UQASHYbVPB2
 ```
 
 Response:
@@ -408,7 +411,7 @@ Response:
 Returns all quality URLs for a movie.
 
 ```bash
-curl https://your-project.vercel.app/api/movie/oppenheimer-Akh5Nrwl7o
+curl https://<your-deployment>.vercel.app/api/movie/oppenheimer-Akh5Nrwl7o
 ```
 
 Response:
@@ -445,7 +448,7 @@ Response:
 Returns all quality URLs for a specific episode of a TV show.
 
 ```bash
-curl "https://your-project.vercel.app/api/tv/lucifer-UQASHYbVPB2?season=1&episode=1"
+curl "https://<your-deployment>.vercel.app/api/tv/lucifer-UQASHYbVPB2?season=1&episode=1"
 ```
 
 Response:
@@ -488,10 +491,10 @@ pointing at a `.srt` file on `cacdn.hakunaymatata.com`.
 
 ```bash
 # Movie
-curl https://your-project.vercel.app/api/captions/oppenheimer-Akh5Nrwl7o
+curl https://<your-deployment>.vercel.app/api/captions/oppenheimer-Akh5Nrwl7o
 
 # TV episode
-curl "https://your-project.vercel.app/api/captions/lucifer-UQASHYbVPB2?season=1&episode=1"
+curl "https://<your-deployment>.vercel.app/api/captions/lucifer-UQASHYbVPB2?season=1&episode=1"
 ```
 
 Response:
@@ -543,7 +546,7 @@ Only the known media CDN hosts are allowed (`bcdnxw.hakunaymatata.com`,
 
 ```bash
 # Stream an MP4 through the proxy
-curl "https://your-project.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
+curl "https://<your-deployment>.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
 ```
 
 ---
@@ -561,7 +564,7 @@ The `filename` parameter is sanitised server-side (only alphanumerics, dot,
 hyphen, underscore and space are kept; capped at 100 characters).
 
 ```bash
-curl "https://your-project.vercel.app/api/download?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
+curl "https://<your-deployment>.vercel.app/api/download?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
 ```
 
 ---
@@ -570,42 +573,42 @@ curl "https://your-project.vercel.app/api/download?url=https%3A%2F%2Fbcdnxw.haku
 
 ```bash
 # 1. Search for a movie (results are ranked by relevance)
-curl "https://your-project.vercel.app/api/search?q=oppenheimer&limit=1"
+curl "https://<your-deployment>.vercel.app/api/search?q=oppenheimer&limit=1"
 # -> detailPath: "oppenheimer-Akh5Nrwl7o"
 
 # 2. Get full details (synopsis, cast, dubs, trailer)
-curl "https://your-project.vercel.app/api/details/oppenheimer-Akh5Nrwl7o"
+curl "https://<your-deployment>.vercel.app/api/details/oppenheimer-Akh5Nrwl7o"
 
 # 3. Get all quality URLs
-curl "https://your-project.vercel.app/api/movie/oppenheimer-Akh5Nrwl7o"
+curl "https://<your-deployment>.vercel.app/api/movie/oppenheimer-Akh5Nrwl7o"
 # -> qualities[0].url is your direct MP4 link
 
 # 4. Get subtitles
-curl "https://your-project.vercel.app/api/captions/oppenheimer-Akh5Nrwl7o"
+curl "https://<your-deployment>.vercel.app/api/captions/oppenheimer-Akh5Nrwl7o"
 
 # 5. Download the MP4 with a clean filename
-curl "https://your-project.vercel.app/api/download?url=<encoded-url>&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
+curl "https://<your-deployment>.vercel.app/api/download?url=<encoded-url>&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
 ```
 
 For TV shows:
 
 ```bash
 # 1. Search
-curl "https://your-project.vercel.app/api/search?q=lucifer&limit=1"
+curl "https://<your-deployment>.vercel.app/api/search?q=lucifer&limit=1"
 # -> detailPath: "lucifer-UQASHYbVPB2"
 
 # 2. List seasons and resolutions
-curl "https://your-project.vercel.app/api/seasons/lucifer-UQASHYbVPB2"
+curl "https://<your-deployment>.vercel.app/api/seasons/lucifer-UQASHYbVPB2"
 
 # 3. Get episode URLs
-curl "https://your-project.vercel.app/api/tv/lucifer-UQASHYbVPB2?season=1&episode=1"
+curl "https://<your-deployment>.vercel.app/api/tv/lucifer-UQASHYbVPB2?season=1&episode=1"
 # -> qualities[3].url is the 1080P link
 
 # 4. Get episode subtitles
-curl "https://your-project.vercel.app/api/captions/lucifer-UQASHYbVPB2?season=1&episode=1"
+curl "https://<your-deployment>.vercel.app/api/captions/lucifer-UQASHYbVPB2?season=1&episode=1"
 
 # 5. Download the episode
-curl "https://your-project.vercel.app/api/download?url=<encoded-url>&filename=Lucifer_S01E001_1080P.mp4" -o Lucifer_S01E001_1080P.mp4
+curl "https://<your-deployment>.vercel.app/api/download?url=<encoded-url>&filename=Lucifer_S01E001_1080P.mp4" -o Lucifer_S01E001_1080P.mp4
 ```
 
 ## Python Scraper (Local)
@@ -750,17 +753,17 @@ The `detailPath` is a URL-safe slug used by the sites. You can find it by:
 
 1. **Use the search API:**
    ```bash
-   curl "https://your-project.vercel.app/api/search?q=oppenheimer&limit=5"
+   curl "https://<your-deployment>.vercel.app/api/search?q=oppenheimer&limit=5"
    ```
 
 2. **Use the trending API:**
    ```bash
-   curl "https://your-project.vercel.app/api/trending?limit=10"
+   curl "https://<your-deployment>.vercel.app/api/trending?limit=10"
    ```
 
 3. **Use the home API:**
    ```bash
-   curl "https://your-project.vercel.app/api/home" | jq '.subjects[].detailPath'
+   curl "https://<your-deployment>.vercel.app/api/home" | jq '.subjects[].detailPath'
    ```
 
 4. **Browse the site manually:** go to `movieboxonline.net`, find a movie, copy the
@@ -908,7 +911,7 @@ To point the local website at the hosted API instead of relative paths, set
 this snippet to the `<head>` of each page:
 
 ```html
-<script>window.MOVIEBOX_API_BASE = "https://your-project.vercel.app";</script>
+<script>window.MOVIEBOX_API_BASE = "https://<your-deployment>.vercel.app";</script>
 ```
 
 ### Deploy to other platforms

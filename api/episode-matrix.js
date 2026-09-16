@@ -1,8 +1,8 @@
 // GET /api/episode-matrix?detailPath=X&season=1&episode=1
 // (or /api/episode-matrix/:detailPath?season=1&episode=1)
 //
-// The composite endpoint AniDen consumes: returns the FULL language matrix
-// for one episode in a single call.
+// The composite endpoint for multi-language clients: returns the FULL language
+// matrix for one episode in a single call.
 //   - one entry per dub variant (Original Audio + every language dub),
 //     each with its own playable qualities (resolution/size/url)
 //   - the AGGREGATED subtitle set for the episode: captions are collected
@@ -130,8 +130,8 @@ export default async function handler(req, res) {
   // We then treat the main subject itself as ONE unnamed Original Audio
   // variant (moviebox's anime catalog is Japanese-first, so claiming
   // original/Japanese is the safe default) - otherwise the matrix would
-  // return zero languages and AniDen would show neither the Ryuu server
-  // nor any download rows for the title.
+  // return zero languages and client apps would show neither a playable
+  // server nor any download rows for the title.
   const dubsRaw = (subject.dubs || []).filter((d) => d.type === 0 && d.detailPath);
   const dubs = dubsRaw.length > 0
     ? dubsRaw
