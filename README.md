@@ -287,6 +287,32 @@ matching play page.
 Deploy it on any small Node host and keep the API itself on a serverless
 platform - the API only ever moves JSON, the proxy only moves media bytes.
 
+### What v4 adds over a plain byte relay
+
+- `GET /go` landing page: hands the download to the browser from the proxy's
+  own (insecure) origin, which sidesteps the mixed-content download blocks
+  secure sites hit, then auto-returns the visitor ~3 seconds after the
+  transfer actually begins (readiness signal: `GET /rdy?n=<nonce>`).
+- `u=<token>` links: the real CDN URL travels AES-256-GCM encrypted (key in
+  `config.json` as `linkKey`, 64 hex chars, shared with the calling site) so
+  it never appears in any URL the browser displays. Tokens expire after 6 h.
+- `dh=<origin>`: the landing page prefers a hostname origin for the actual
+  download request, so the browser's download list records a host name
+  instead of a raw IP, and falls back to the IP form automatically when the
+  hostname probe fails.
+- Download integrity: every response carries an exact total size (a 1-byte
+  probe recovers it when the CDN answers without one), and a transfer that
+  ends short of the promised size destroys the socket instead of ending
+  cleanly - download managers then resume with a Range request rather than
+  finalizing a truncated (corrupt) file.
+
+### Uptime monitoring
+
+`.github/workflows/relay-uptime.yml` probes the relay's health endpoint once
+an hour, appends each result to `relay-status.log` (committed only when the
+state changes) and opens or comments on a `Relay DOWN` issue when it stops
+answering - a running record of how long the container survives.
+
 ## Project layout
 
 ```
