@@ -85,13 +85,14 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const SITE = "https://movieboxonline.net";
-const HOME = "https://propflix.name.ng"; // auto-return target origin for /go
+const HOME = process.env.RENEW_ORIGIN || "https://propflix.name.ng"; // auto-return target origin for /go + renew-redirect base
 const UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 const ALLOW_SUFFIX = process.env.CDN_ALLOW_SUFFIX || ".hakunaymatata.com";
 const CONNECT_TIMEOUT_MS = 20000;
 const PROBE_TIMEOUT_MS = 15000;
-const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // signed CDN links live ~2h; resolve-at-click keeps these fresh
+const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // nominal link lifetime (renew keeps older tokens usable)
+const RENEW_TTL_MS = 72 * 60 * 60 * 1000; // hard stop: links this old must be re-clicked on the site
 const READY_TTL_MS = 15 * 60 * 1000; // nonce -> started records live this long
 
 function readConfig() {
@@ -144,9 +145,15 @@ function isStarted(nonce) {
 }
 
 /* ===== AES-256-GCM link tokens ========================================== */
-/* payload: {u:"https://cdn...", n:"File.mp4", d:"detailPath", b:"/download/x", t:1690000000000}
+/* payload: {u:"https://cdn...", n:"File.mp4", d:"detailPath", b:"/download/x",
+ *           t:1690000000000, c:"/api/dl?title=...&res=...&variant=..."}
  * token:   base64url(iv[12] || ciphertext+tag)
- * Both sides (this server and the site backend) share the 32-byte key. */
+ * Both sides (this server and the site backend) share the 32-byte key.
+ *
+ * `c` is the calling site's download-coordinate path: when the CDN link
+ * behind the token goes stale (paused download resumed hours later), the
+ * relay 302s the download manager to SITE + c so it re-resolves a FRESH
+ * link and the paused download completes instead of dying half-written. */
 
 function sealToken(payload) {
   if (!LINK_KEY) return null;
@@ -173,7 +180,11 @@ function openToken(token) {
     const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
     const payload = JSON.parse(pt.toString("utf8"));
     if (typeof payload.u !== "string") return null;
-    if (typeof payload.t !== "number" || Date.now() - payload.t > TOKEN_TTL_MS) return null;
+    if (typeof payload.t !== "number") return null;
+    // Past the nominal TTL the CDN link is usually stale but not always -
+    // keep the token usable (the upstream fetch decides) up to RENEW_TTL,
+    // so long-paused downloads can still self-heal via the renew redirect.
+    if (Date.now() - payload.t > RENEW_TTL_MS) return null;
     return payload;
   } catch {
     return null;
@@ -191,6 +202,7 @@ function resolveTarget(query) {
         name: typeof payload.n === "string" ? payload.n : "",
         dp: typeof payload.d === "string" ? payload.d : "",
         back: typeof payload.b === "string" ? payload.b : "",
+        renew: typeof payload.c === "string" && /^\/[a-z0-9/._?&=%-]*$/i.test(payload.c) ? payload.c : "",
         via: "token",
       };
     }
@@ -203,8 +215,25 @@ function resolveTarget(query) {
     name: String(query.get("name") || ""),
     dp: String(query.get("dp") || ""),
     back: String(query.get("back") || ""),
+    renew: "",
     via: "plain",
   };
+}
+
+/** 302 to the calling site's re-resolve endpoint. The browser download
+ * manager follows the chain (site re-resolves -> 302 back to a FRESH relay
+ * link) so a paused download resumes seamlessly even after the signed CDN
+ * link behind the token expired - instead of failing and leaving a
+ * half-written file that plays corrupt up to the pause point. */
+function renewRedirect(req, res, renewPath) {
+  const base = String(HOME).replace(/\/+$/, "");
+  const sep = renewPath.includes("?") ? "&" : "?";
+  res.writeHead(302, {
+    Location: base + renewPath + sep + "auto=1",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  return res.end();
 }
 
 /** PropFlix-internal return path for the /go auto-return. Strict whitelist:
@@ -438,13 +467,16 @@ async function relay(req, res, query, forceDownload) {
   clearTimeout(timeout);
 
   // The CDN refusing the link (403/429 = referer rejected, 404/410 = expired
-  // signature) means the signed URL went stale: relay a friendly page, not
-  // the upstream's HTML noise.
+  // signature) means the signed URL went stale. With renew coordinates in
+  // the token, bounce the download manager to the site for a fresh link
+  // (paused downloads then COMPLETE instead of dying half-written);
+  // otherwise relay a friendly page, not the upstream's HTML noise.
   if ([403, 429, 404, 410].includes(up.status)) {
     try {
       await up.arrayBuffer();
     } catch {}
     stats.errors++;
+    if (target.renew) return renewRedirect(req, res, target.renew);
     return sendHtmlError(
       req,
       res,
@@ -452,6 +484,27 @@ async function relay(req, res, query, forceDownload) {
       "This download link has expired",
       "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
     );
+  }
+
+  // A 200 whose body is HTML on a media route is the CDN's edge serving an
+  // error page (expired-signature edge case): streaming it into the file
+  // would corrupt the download. Treat exactly like a refused link.
+  {
+    const ct = String(up.headers.get("content-type") || "").toLowerCase();
+    if (up.status === 200 && ct.includes("text/html")) {
+      try {
+        await up.arrayBuffer();
+      } catch {}
+      stats.errors++;
+      if (target.renew) return renewRedirect(req, res, target.renew);
+      return sendHtmlError(
+        req,
+        res,
+        503,
+        "This download link has expired",
+        "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
+      );
+    }
   }
 
   // ---- v4: guarantee a total size on the response -------------------------
@@ -491,6 +544,22 @@ async function relay(req, res, query, forceDownload) {
             await up.arrayBuffer();
           } catch {}
           stats.errors++;
+          if (target.renew) return renewRedirect(req, res, target.renew);
+          return sendHtmlError(
+            req,
+            res,
+            503,
+            "This download link has expired",
+            "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
+          );
+        }
+        const ct2 = String(up.headers.get("content-type") || "").toLowerCase();
+        if (up.status === 200 && ct2.includes("text/html")) {
+          try {
+            await up.arrayBuffer();
+          } catch {}
+          stats.errors++;
+          if (target.renew) return renewRedirect(req, res, target.renew);
           return sendHtmlError(
             req,
             res,
