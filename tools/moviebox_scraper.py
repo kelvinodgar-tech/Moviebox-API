@@ -14,9 +14,7 @@ headers used for CORS.
 
 IMPORTANT: The MP4 URLs returned by the API require a Referer header
 (Referer: https://movieboxonline.net/) to download. Without it, the CDN returns
-HTTP 429. When using a hosted instance of this API, use the /api/stream
-and /api/download proxy endpoints which inject the Referer header
-server-side.
+HTTP 429. Send that header yourself when fetching the media URLs.
 
 HOSTED API ENDPOINTS:
   GET /api/trending?limit=10          - trending movies/shows
@@ -27,8 +25,6 @@ HOSTED API ENDPOINTS:
   GET /api/movie/:detailPath          - movie quality URLs (360P/480P/720P/1080P)
   GET /api/tv/:detailPath?s=1&e=1     - TV episode quality URLs
   GET /api/captions/:detailPath?s=1&e=1 - subtitle URLs (13+ languages)
-  GET /api/stream?url=<encoded>       - stream proxy (injects Referer, handles Range)
-  GET /api/download?url=<enc>&f=name  - download proxy (injects Referer, sets attachment)
 
 AUDIO/DUBS:
   The /api/details endpoint returns a "dubs" array with alternative audio tracks.

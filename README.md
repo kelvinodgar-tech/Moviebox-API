@@ -11,74 +11,17 @@ All three sites share the same backend. **The scraper and API primarily target
 movieboxonline.net** (its search backend returns 5-10x more results than the
 old SSR page scrapes). They fetch direct MP4
 URLs for movies and TV shows in all available qualities (360P, 480P, 720P,
-1080P). The bundled demo website (`public/`) puts all of it to work: hero
-banners, trending list, search with relevance ranking, detail pages with
-cast, season/episode selectors with pagination, an HTML5 video player with
-custom in-player controls (quality, subtitles, audio language), inline
-trailer playback, and direct download links.
+1080P).
 
 ## Hosted
 
 There is no shared public instance - deploy your own (see
 [Deploy](#deploy) below). After deploying:
 
-- **Website:** `https://<your-deployment>.vercel.app`
 - **API base:** `https://<your-deployment>.vercel.app/api`
 
-The website is served from `/` (the static files in `public/`). The API is
-served from `/api/*`. Both live on the same Vercel project, so the website
-calls the API with relative paths and there are no CORS issues.
-
-## Website
-
-The website is a single-page-style static site built with vanilla HTML, CSS
-and JavaScript (no framework, no build step). Pages:
-
-| Page | URL | Description |
-|------|-----|-------------|
-| Home | `/` | Hero banner carousel, trending list, all home sections |
-| Search | `/search.html?q=lucifer` | Grid of search results ranked by relevance, with covers, ratings, type |
-| Detail | `/detail.html?path=lucifer-UQASHYbVPB2` | Inline player with custom controls, synopsis, cast, seasons for TV, inline trailer |
-
-### Features
-
-- Dark theme (background `#0f0f0f`, MovieBox green `#10b84d` accent).
-- Fully responsive grid (2 columns on mobile, up to 6 on wide screens).
-- Sticky header with search box on every page.
-- Hero banner carousel that auto-advances every 6 seconds. The hero is capped
-  at 50vh on mobile so it doesn't dominate the screen, and the carousel dots
-  are centered and tappable.
-- Movie/TV cards with cover, rating badge, type badge, hover play overlay.
-- Detail page with an inline video player at the top, followed by the title,
-  genres, IMDB rating, synopsis, language reference, facts, and cast. For TV
-  shows, an episode list appears below with pagination for long seasons.
-- Custom HTML5 video player with controls rendered INSIDE the player:
-  - Play/pause, seek bar, current time / duration, volume, fullscreen.
-  - A gear icon (settings) that opens a menu with the Quality selector
-    (360P/480P/720P/1080P, no file sizes shown) and the Audio language
-    selector (dubs). Switching audio re-fetches the stream URL for the new
-    dub's detailPath and switches the source.
-  - A CC button that opens a Subtitles menu listing every available subtitle
-    language returned by `/api/captions`. Selecting a language fetches the
-    `.srt` file through the `/api/stream` proxy, parses it, and renders the
-    cue text as an overlay on the video. "Off" turns subtitles off.
-  - Controls auto-hide during playback and reappear on mouse move or tap.
-- Inline trailer section on the detail page. The trailer is lazy-loaded only
-  when the section scrolls into view, and it plays inline (no modal).
-- Episode pagination for TV shows: seasons with more than 24 episodes are
-  paginated in groups of 24 with a dropdown ("Episodes 1-24", "Episodes
-  25-48", ...). Seasons with more than 20 episodes also show a "Jump to
-  episode" search box that takes the user directly to the episode they type.
-- Download modal listing every available quality as a simple "Download"
-  button. The download goes through `/api/download?url=...&filename=...`,
-  which sets `Content-Disposition: attachment` so the file saves with a
-  clean filename:
-  - Movies: `{Title}_{Resolution}P.mp4` (e.g. `Oppenheimer_1080P.mp4`)
-  - Episodes: `{Title}_S01E013_{Resolution}P.mp4` (e.g.
-    `Lucifer_S01E013_1080P.mp4`); the episode number is 3 digits so the
-    files sort correctly.
-- Skeleton loaders, error boxes, and toast notifications for transient
-  feedback.
+The root URL (`/`) answers with a plain JSON status object; every other
+route is an API endpoint. No frontend is served.
 
 ## API
 
@@ -100,14 +43,11 @@ and JavaScript (no framework, no build step). Pages:
 | GET | `/api/tv/:detailPath?season=1&episode=1` | TV episode stream/download URLs |
 | GET | `/api/captions/:detailPath?season=1&episode=1` | Subtitle URLs (one per language) |
 | GET | `/api/episode-matrix/:detailPath?season=1&episode=1` | Composite for integrators: the full language matrix for one episode - one entry per dub variant (Original Audio + every language dub, each with its own qualities incl. sizes) plus the AGGREGATED subtitle set (captions unioned across variants, deduped per language, richest set wins). `ttlHint` advertises how long the returned CDN URLs stay valid (7200s conservative; measured: video sign URLs live for hours, caption CloudFront URLs for 7 days). Movies: omit season/episode |
-| GET | `/api/stream?url=<encoded-media-url>` | Media proxy: forwards a CDN URL with the required `Referer` header so the browser can play/download MP4s |
-| GET | `/api/download?url=<encoded-media-url>&filename=<name>` | Same as `/api/stream` but also sets `Content-Disposition: attachment; filename="..."` |
 
 All endpoints:
 
 - Accept `GET` (and `OPTIONS` for CORS preflight).
-- Return JSON (except `/api/stream` and `/api/download` which proxy the
-  raw media bytes).
+- Return JSON.
 - Send `Access-Control-Allow-Origin: *` so they can be called from any
   browser.
 - Use a 15-second timeout when calling the upstream backend.
@@ -357,8 +297,8 @@ Response:
 
 Each entry in `dubs` is one of:
 
-- `type=0, kind="dub"` - a dubbed audio track. Switching to it inside the
-  player re-fetches the stream URLs for `detailPath` and swaps the source.
+- `type=0, kind="dub"` - a dubbed audio track. To get its media URLs, call
+  `/api/movie` or `/api/tv` with the dub's own `detailPath`.
 - `type=1, kind="subtitle"` - a subtitle-language variant of the same title.
 - `original=true` - the original-language track.
 
@@ -521,50 +461,8 @@ Response:
 }
 ```
 
-The website's player fetches each `.srt` URL through `/api/stream?url=...`
-(the CDN requires the `Referer` header that the proxy adds), parses the SRT
-blocks into `{ start, end, text }` cues, and renders the active cue as an
-overlay on the video at the bottom center. Selecting a different language in
-the CC menu swaps the cues; "Off" clears them.
-
----
-
-### GET /api/stream?url=<encoded-media-url>
-
-Edge-runtime media proxy. The video CDN
-(`bcdnxw.hakunaymatata.com`) requires a `Referer: https://movieboxonline.net/`
-header on every request and rejects browser and cloud-IP requests without
-it. A browser `<video>` tag cannot set that header for a cross-origin
-resource, so the in-page player and the download buttons route MP4 and SRT
-URLs through this proxy. It streams the response body (it does not buffer the
-whole file) and forwards `Range` requests so the browser can seek.
-
-Only the known media CDN hosts are allowed (`bcdnxw.hakunaymatata.com`,
-`cacdn.hakunaymatata.com`, `macdn.aoneroom.com`, `pbcdnw.aoneroom.com`,
-`pbcdn.aoneroom.com`, `pacdn.aoneroom.com`).
-
-```bash
-# Stream an MP4 through the proxy
-curl "https://<your-deployment>.vercel.app/api/stream?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4"
-```
-
----
-
-### GET /api/download?url=<encoded-media-url>&filename=<name>
-
-Same as `/api/stream` (Edge-runtime proxy, same allowed hosts, same Referer
-header) but additionally sets
-`Content-Disposition: attachment; filename="<name>"` so the browser saves the
-file with a clean name instead of a random signed-URL filename. The website
-uses this for its Download buttons so movies save as
-`Oppenheimer_1080P.mp4` and episodes save as `Lucifer_S01E013_1080P.mp4`.
-
-The `filename` parameter is sanitised server-side (only alphanumerics, dot,
-hyphen, underscore and space are kept; capped at 100 characters).
-
-```bash
-curl "https://<your-deployment>.vercel.app/api/download?url=https%3A%2F%2Fbcdnxw.hakunaymatata.com%2Fresource%2F...mp4&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
-```
+The caption `.srt` URLs are plain signed CloudFront links - they work from any
+HTTP client without special headers.
 
 ---
 
@@ -580,13 +478,10 @@ curl "https://<your-deployment>.vercel.app/api/details/oppenheimer-Akh5Nrwl7o"
 
 # 3. Get all quality URLs
 curl "https://<your-deployment>.vercel.app/api/movie/oppenheimer-Akh5Nrwl7o"
-# -> qualities[0].url is your direct MP4 link
+# -> qualities[0].url is your direct MP4 link (send Referer: https://movieboxonline.net/ when fetching it)
 
 # 4. Get subtitles
 curl "https://<your-deployment>.vercel.app/api/captions/oppenheimer-Akh5Nrwl7o"
-
-# 5. Download the MP4 with a clean filename
-curl "https://<your-deployment>.vercel.app/api/download?url=<encoded-url>&filename=Oppenheimer_1080P.mp4" -o Oppenheimer_1080P.mp4
 ```
 
 For TV shows:
@@ -601,13 +496,10 @@ curl "https://<your-deployment>.vercel.app/api/seasons/lucifer-UQASHYbVPB2"
 
 # 3. Get episode URLs
 curl "https://<your-deployment>.vercel.app/api/tv/lucifer-UQASHYbVPB2?season=1&episode=1"
-# -> qualities[3].url is the 1080P link
+# -> qualities[3].url is the 1080P link (send Referer: https://movieboxonline.net/ when fetching it)
 
 # 4. Get episode subtitles
 curl "https://<your-deployment>.vercel.app/api/captions/lucifer-UQASHYbVPB2?season=1&episode=1"
-
-# 5. Download the episode
-curl "https://<your-deployment>.vercel.app/api/download?url=<encoded-url>&filename=Lucifer_S01E001_1080P.mp4" -o Lucifer_S01E001_1080P.mp4
 ```
 
 ## Python Scraper (Local)
@@ -854,14 +746,15 @@ Python scraper default to movieboxonline.net.
    - Framework preset: Other (no framework)
    - Click Deploy
 
-4. The site will be available at `https://<your-project>.vercel.app/` and the
-   API at `https://<your-project>.vercel.app/api/...`
+4. The API will be available at `https://<your-project>.vercel.app/api/...`
+   (the root URL answers with a JSON status object).
 
 ### Project structure
 
 ```
 Moviebox-API/
 |-- api/
+|   |-- root.js                # GET / (JSON status)
 |   |-- home.js                # GET /api/home
 |   |-- trending.js            # GET /api/trending?limit=20
 |   |-- search.js              # GET /api/search?q=...&limit=10 (ranked by relevance)
@@ -870,16 +763,9 @@ Moviebox-API/
 |   |-- movie.js               # GET /api/movie/:detailPath
 |   |-- tv.js                  # GET /api/tv/:detailPath?season=1&episode=1
 |   |-- captions.js            # GET /api/captions/:detailPath?season=1&episode=1
-|   |-- stream.js              # GET /api/stream?url=... (Edge, media proxy)
-|   `-- download.js            # GET /api/download?url=...&filename=... (Edge)
-|-- public/
-|   |-- index.html             # Homepage (hero, trending, sections)
-|   |-- detail.html            # Movie/TV detail page (inline player, trailer)
-|   |-- search.html            # Search results page
-|   |-- css/
-|   |   `-- style.css          # Dark theme stylesheet
-|   `-- js/
-|       `-- app.js             # All frontend logic (custom player, SRT parser)
+|   |-- episode-matrix.js      # GET /api/episode-matrix/:detailPath?season=1&episode=1
+|   |-- browse.js              # GET /api/browse?type=&genre=&country=&year=&sort= (also ?filters=true)
+|   `-- catalog.js             # GET /api/catalog?type=movie|tv|animation
 |-- tools/
 |   `-- moviebox_scraper.py    # Python CLI scraper (repo-only, not deployed)
 |-- vercel.json                # Vercel config (rewrites + headers)
@@ -889,28 +775,11 @@ Moviebox-API/
 
 ### Local development
 
-The site is plain static HTML/CSS/JS. To preview it locally:
-
-```bash
-# Python's built-in server
-cd Moviebox-API
-python3 -m http.server 8080
-# then open http://localhost:8080/public/index.html
-```
-
 The API runs on Vercel. To run the API locally, use the Vercel CLI:
 
 ```bash
 npm i -g vercel
 vercel dev
-```
-
-To point the local website at the hosted API instead of relative paths, set
-`window.MOVIEBOX_API_BASE` before loading `app.js`, for example by adding
-this snippet to the `<head>` of each page:
-
-```html
-<script>window.MOVIEBOX_API_BASE = "https://<your-deployment>.vercel.app";</script>
 ```
 
 ### Deploy to other platforms
@@ -919,13 +788,8 @@ The API routes in `api/` are standard serverless functions (Vercel format).
 They use the Web `fetch` API and work on:
 
 - Vercel (default, no config needed)
-- Cloudflare Workers (wrap in `export default { fetch() }`)
 - Netlify Functions (rename to `api/movie.js` -> `netlify/functions/movie.js`)
 - Any Node.js server (use an adapter)
-
-The static website in `public/` works on any static host (GitHub Pages,
-Netlify, S3, Cloudflare Pages, etc.). Just point it at the hosted API URL by
-setting `window.MOVIEBOX_API_BASE`.
 
 The Python scraper (`tools/moviebox_scraper.py`) runs anywhere Python 3.7+ is
 available. No dependencies needed.
