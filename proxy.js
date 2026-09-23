@@ -24,6 +24,12 @@
 // `url` must be a signed link from an API response (the host must be on the
 // allowlist). `dp` optionally rebuilds the Referer as the matching play page;
 // otherwise the site root is used, which the CDN also accepts.
+//
+// Size transparency: when the client sends no Range the upstream request
+// carries `Range: bytes=0-`, and a resulting full-file 206 is rewritten to a
+// plain 200 with the total Content-Length - so browser download managers
+// show real progress ("25 / 357 MB") instead of "24 / ?" even when the CDN
+// would have answered a plain GET with a lengthless chunked stream.
 
 import http from "node:http";
 import fs from "node:fs";
@@ -66,6 +72,27 @@ function sendJson(req, res, status, body) {
   res.end(req.method === "HEAD" ? undefined : JSON.stringify(body) + "\n");
 }
 
+/** Small friendly HTML page shown when the CDN refuses a link (usually an
+ * expired signed URL). Raw upstream error bodies are useless to humans. */
+function sendHtmlError(req, res, status, title, detail) {
+  cors(res);
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  if (req.method === "HEAD") return res.end();
+  res.end(
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<title>${title}</title><style>` +
+      `body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0e14;color:#e7ecf3;font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}` +
+      `.card{max-width:420px;margin:20px;padding:28px 26px;background:#151a24;border:1px solid #2a3345;border-radius:16px;text-align:center}` +
+      `h1{font-size:17px;margin:0 0 10px}p{margin:0;color:#9aa7ba;font-size:13.5px}` +
+      `a{display:inline-block;margin-top:18px;padding:10px 22px;background:#22c55e;color:#04140a;font-weight:700;border-radius:10px;text-decoration:none;font-size:14px}` +
+      `</style></head><body><div class="card"><h1>${title}</h1><p>${detail}</p>` +
+      `<a href="javascript:history.back()">Go back</a></div></body></html>`,
+  );
+}
+
 /** Clean filename for the Content-Disposition header. */
 function sanitizeName(raw, fallbackUrl) {
   let name = String(raw || "")
@@ -99,13 +126,16 @@ async function relay(req, res, query, forceDownload) {
   const dp = String(query.get("dp") || "").replace(/[^a-z0-9-]/gi, "");
   const playReferer = dp ? `${SITE}/play/${dp}` : `${SITE}/`;
 
+  const clientRange = req.headers.range || "";
   const upstreamHeaders = {
     "User-Agent": UA,
     Accept: "*/*",
     Referer: playReferer,
+    // Probe the full file with an open-ended range even when the client sent
+    // none: a 206 answer carries Content-Range (total size) and a 200 answer
+    // carries Content-Length - either way the response is size-transparent.
+    Range: clientRange || "bytes=0-",
   };
-  const range = req.headers.range;
-  if (range) upstreamHeaders.Range = range;
 
   const controller = new AbortController();
   const abortUpstream = () => {
@@ -152,19 +182,52 @@ async function relay(req, res, query, forceDownload) {
   }
   clearTimeout(timeout);
 
+  // The CDN refusing the link (403/429 = referer rejected, 404/410 = expired
+  // signature) means the signed URL went stale: relay a friendly page, not
+  // the upstream's HTML noise.
+  if ([403, 429, 404, 410].includes(up.status)) {
+    try {
+      await up.arrayBuffer();
+    } catch {}
+    stats.errors++;
+    return sendHtmlError(
+      req,
+      res,
+      503,
+      "This download link has expired",
+      "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
+    );
+  }
+
   stats.served++;
   cors(res);
   const headers = {};
-  for (const h of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified"]) {
+  for (const h of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"]) {
     const v = up.headers.get(h.toLowerCase());
     if (v) headers[h] = v;
   }
+
+  // Client asked for no range but got a full-file 206 (from the bytes=0-
+  // probe): deliver it as a clean 200 with the total size so the browser
+  // download progress shows "25 / 357 MB" rather than an unknown total.
+  let status = up.status;
+  if (!clientRange && status === 206) {
+    const m = String(headers["Content-Range"] || "").match(/^bytes\s+0-(\d+)\/(\d+)$/i);
+    if (m && Number(m[1]) === Number(m[2]) - 1) {
+      status = 200;
+      headers["Content-Length"] = m[2];
+      delete headers["Content-Range"];
+    }
+  }
+
   if (!headers["Content-Type"]) headers["Content-Type"] = "application/octet-stream";
   if (!headers["Accept-Ranges"]) headers["Accept-Ranges"] = "bytes";
+  // Never let a cache layer store multi-hundred-MB media responses.
+  headers["Cache-Control"] = "no-store";
   if (forceDownload) {
     headers["Content-Disposition"] = `attachment; filename="${sanitizeName(query.get("name"), rawUrl)}"`;
   }
-  res.writeHead(up.status, headers);
+  res.writeHead(status, headers);
 
   if (req.method === "HEAD" || !up.body) {
     res.end();
