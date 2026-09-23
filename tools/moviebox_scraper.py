@@ -17,22 +17,19 @@ IMPORTANT: The MP4 URLs returned by the API require a Referer header
 HTTP 429. Send that header yourself when fetching the media URLs.
 
 HOSTED API ENDPOINTS:
-  GET /api/trending?limit=10          - trending movies/shows
-  GET /api/search?q=query&limit=20    - search (combines suggest + trending + home)
-  GET /api/home                       - full home page content
-  GET /api/details/:detailPath        - full details (synopsis, cast, dubs, trailer)
-  GET /api/seasons/:detailPath        - TV seasons info (episodes, resolutions)
-  GET /api/movie/:detailPath          - movie quality URLs (360P/480P/720P/1080P)
-  GET /api/tv/:detailPath?s=1&e=1     - TV episode quality URLs
-  GET /api/captions/:detailPath?s=1&e=1 - subtitle URLs (13+ languages)
+  GET /api/trending?limit=10                          - trending movies/shows
+  GET /api/search?q=query&limit=20                    - search by title
+  GET /api/details?id=<detailPath>                    - full details (synopsis, cast, dubs, seasons)
+  GET /api/links?id=<detailPath>&season=1&episode=1   - movie/episode quality URLs (360P..1080P)
+  GET /api/subtitles?id=<detailPath>&season=1&episode=1 - subtitle URLs (13+ languages)
 
 AUDIO/DUBS:
   The /api/details endpoint returns a "dubs" array with alternative audio tracks.
   Each dub has its own detailPath. To get video URLs for a dubbed version,
-  call /api/movie or /api/tv with the dub's detailPath instead of the original.
+  call /api/links with the dub's detailPath instead of the original.
 
 SUBTITLES:
-  The /api/captions endpoint returns signed subtitle URLs for 13+ languages.
+  The /api/subtitles endpoint returns signed subtitle URLs for 13+ languages.
   These URLs do NOT require a Referer header and can be used directly.
 
 USAGE:

@@ -3,30 +3,6 @@
     {
       "source": "/",
       "destination": "/api/root"
-    },
-    {
-      "source": "/api/movie/:detailPath",
-      "destination": "/api/movie?detailPath=:detailPath"
-    },
-    {
-      "source": "/api/tv/:detailPath",
-      "destination": "/api/tv?detailPath=:detailPath"
-    },
-    {
-      "source": "/api/details/:detailPath",
-      "destination": "/api/details?detailPath=:detailPath"
-    },
-    {
-      "source": "/api/seasons/:detailPath",
-      "destination": "/api/seasons?detailPath=:detailPath"
-    },
-    {
-      "source": "/api/captions/:detailPath",
-      "destination": "/api/captions?detailPath=:detailPath"
-    },
-    {
-      "source": "/api/episode-matrix/:detailPath",
-      "destination": "/api/episode-matrix?detailPath=:detailPath"
     }
   ],
   "headers": [
