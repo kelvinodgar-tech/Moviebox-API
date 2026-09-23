@@ -8,22 +8,27 @@
 //   GET /api/search?q=&limit=
 //   GET /api/trending?limit=
 //   GET /api/details?id=
-//   GET /api/links?id=&season=&episode=
+//   GET /api/movie?id=
+//   GET /api/tv?id=&season=&episode=
 //   GET /api/subtitles?id=&season=&episode=
+//   GET /api/episode-matrix?id=&season=&episode=
 
 import http from "node:http";
 import { run as search } from "./lib/search.js";
 import { run as trending } from "./lib/trending.js";
 import { run as details } from "./lib/details.js";
-import { run as links } from "./lib/links.js";
+import { runMovie, runTv } from "./lib/links.js";
 import { run as subtitles } from "./lib/subtitles.js";
+import { run as episodeMatrix } from "./lib/episode-matrix.js";
 
 const ROUTES = {
   "/api/search": search,
   "/api/trending": trending,
   "/api/details": details,
-  "/api/links": links,
+  "/api/movie": runMovie,
+  "/api/tv": runTv,
   "/api/subtitles": subtitles,
+  "/api/episode-matrix": episodeMatrix,
 };
 
 const startedAt = Date.now();

@@ -20,13 +20,15 @@ HOSTED API ENDPOINTS:
   GET /api/trending?limit=10                          - trending movies/shows
   GET /api/search?q=query&limit=20                    - search by title
   GET /api/details?id=<detailPath>                    - full details (synopsis, cast, dubs, seasons)
-  GET /api/links?id=<detailPath>&season=1&episode=1   - movie/episode quality URLs (360P..1080P)
+  GET /api/movie?id=<detailPath>                       - movie quality URLs (360P..1080P)
+  GET /api/tv?id=<detailPath>&season=1&episode=1      - episode quality URLs (360P..1080P)
   GET /api/subtitles?id=<detailPath>&season=1&episode=1 - subtitle URLs (13+ languages)
+  GET /api/episode-matrix?id=<detailPath>&season=1&episode=1 - every audio language + subtitle in one call
 
 AUDIO/DUBS:
   The /api/details endpoint returns a "dubs" array with alternative audio tracks.
   Each dub has its own detailPath. To get video URLs for a dubbed version,
-  call /api/links with the dub's detailPath instead of the original.
+  call /api/movie or /api/tv with the dub's detailPath instead of the original.
 
 SUBTITLES:
   The /api/subtitles endpoint returns signed subtitle URLs for 13+ languages.

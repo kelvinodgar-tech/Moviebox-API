@@ -24,8 +24,10 @@ The same endpoints also run as Vercel serverless functions from `api/` — see
 | GET | `/api/search?q=one+piece&limit=20` | titles matching a query |
 | GET | `/api/trending?limit=20` | current trending movies and shows |
 | GET | `/api/details?id=<detailPath>` | full metadata: synopsis, cast, dubs, seasons |
-| GET | `/api/links?id=<detailPath>&season=1&episode=1` | MP4 URLs per quality (movie or episode) |
+| GET | `/api/movie?id=<detailPath>` | MP4 URLs per quality for a movie |
+| GET | `/api/tv?id=<detailPath>&season=1&episode=1` | MP4 URLs per quality for an episode |
 | GET | `/api/subtitles?id=<detailPath>&season=1&episode=1` | subtitle files per language |
+| GET | `/api/episode-matrix?id=<detailPath>&season=1&episode=1` | every audio language + every subtitle in one call |
 
 Every endpoint answers `GET` (plus `OPTIONS` for CORS preflight), returns
 JSON, and sends `Access-Control-Allow-Origin: *`.
@@ -80,8 +82,8 @@ available resolutions.
 
 Each entry in `dubs` is one of:
 
-- `kind: "dub"` — a dubbed audio track; get its files by calling `/api/links`
-  with the dub's own `detailPath`.
+- `kind: "dub"` — a dubbed audio track; get its files by calling `/api/movie`
+  or `/api/tv` with the dub's own `detailPath`.
 - `kind: "subtitle"` — a subtitle-language variant of the same title.
 - `original: true` — the original-language track.
 
@@ -103,10 +105,10 @@ curl "http://localhost:3000/api/details?id=lucifer-UQASHYbVPB2"
 }
 ```
 
-### GET /api/links?id=...&season=1&episode=1
+### GET /api/movie?id=...
 
-Direct MP4 URLs for every available quality of a movie or a TV episode.
-Movies: omit `season`/`episode`. TV: they default to 1.
+Direct MP4 URLs for every available quality of a movie. Calling it on a TV
+subject returns a `400` pointing at `/api/tv`.
 
 The endpoint tries the backend's `/play` source first (1080P included, free
 but rate-limited to roughly one successful call per 2–3 minutes per IP) and
@@ -114,7 +116,7 @@ falls back to `/download` (where 1080P comes back VIP-locked). The `source`
 field tells you which one answered.
 
 ```bash
-curl "http://localhost:3000/api/links?id=oppenheimer-Akh5Nrwl7o"
+curl "http://localhost:3000/api/movie?id=oppenheimer-Akh5Nrwl7o"
 ```
 
 ```json
@@ -128,6 +130,17 @@ curl "http://localhost:3000/api/links?id=oppenheimer-Akh5Nrwl7o"
   ],
   "best_free": { "resolution": 1080, "size_mb": 914.9, "url": "..." }
 }
+```
+
+### GET /api/tv?id=...&season=1&episode=1
+
+Direct MP4 URLs for one episode of a TV show. `season` and `episode` default
+to 1; the response also carries `available_seasons` (season number, episode
+count, resolutions) so you can walk a whole show. Calling it on a movie
+subject returns a `400` pointing at `/api/movie`.
+
+```bash
+curl "http://localhost:3000/api/tv?id=lucifer-UQASHYbVPB2&season=1&episode=1"
 ```
 
 ### GET /api/subtitles?id=...&season=1&episode=1
@@ -154,6 +167,51 @@ curl "http://localhost:3000/api/subtitles?id=lucifer-UQASHYbVPB2&season=1&episod
 }
 ```
 
+### GET /api/episode-matrix?id=...&season=1&episode=1
+
+The composite endpoint for multi-language clients: the FULL language matrix
+for one episode (or a whole movie, omitting `season`/`episode`) in a single
+call - no fan-out over `dubs` needed.
+
+```bash
+curl "http://localhost:3000/api/episode-matrix?id=demon-slayer-kimetsu-no-yaiba-english-cK8E2dUTaC8&season=1&episode=1"
+```
+
+```json
+{
+  "title": "Demon Slayer: Kimetsu no Yaiba [English] S1-S5",
+  "type": "tv",
+  "season": 1,
+  "episode": 1,
+  "languageCount": 8,
+  "languages": [
+    { "lanName": "Original Audio", "lanCode": "ja", "original": true, "kind": "original",
+      "detailPath": "demon-slayer-...-OpOlWPwnoj4",
+      "qualities": [
+        { "resolution": 1080, "size_mb": 486.2, "url": "https://bcdnxw.hakunaymatata.com/...mp4?sign=..." }
+      ] },
+    { "lanName": "English", "lanCode": "en", "original": false, "kind": "dub",
+      "detailPath": "demon-slayer-...-cK8E2dUTaC8",
+      "qualities": [ { "resolution": 1080, "size_mb": 486.2, "url": "..." } ] }
+  ],
+  "subtitleCount": 13,
+  "subtitles": [
+    { "lanName": "English", "lanCode": "en",
+      "url": "https://cacdn.hakunaymatata.com/subtitle/...srt?Policy=...",
+      "size": 21312 }
+  ],
+  "fetchedAt": 1761600000,
+  "ttlHint": 7200
+}
+```
+
+Each entry in `languages` is one dub variant with its own playable
+`qualities`. `subtitles` is the AGGREGATED set: captions collected from every
+variant that has streams, deduped per language (the Original Audio variant
+usually carries the richest caption set while dub variants carry none). The
+CDN urls stay valid for hours - `ttlHint` advertises a conservative 7200
+seconds; re-resolve after that instead of storing them.
+
 ## Typical workflow
 
 ```bash
@@ -164,11 +222,15 @@ curl "http://localhost:3000/api/search?q=oppenheimer&limit=1"
 # 2. Metadata + cast + dubs (seasons for TV)
 curl "http://localhost:3000/api/details?id=oppenheimer-Akh5Nrwl7o"
 
-# 3. Direct MP4 URLs
-curl "http://localhost:3000/api/links?id=oppenheimer-Akh5Nrwl7o"
+# 3. Direct MP4 URLs (movie or episode)
+curl "http://localhost:3000/api/movie?id=oppenheimer-Akh5Nrwl7o"
+curl "http://localhost:3000/api/tv?id=lucifer-UQASHYbVPB2&season=1&episode=1"
 
 # 4. Subtitles
 curl "http://localhost:3000/api/subtitles?id=oppenheimer-Akh5Nrwl7o"
+
+# Or get everything in ONE call (every audio language + every subtitle)
+curl "http://localhost:3000/api/episode-matrix?id=oppenheimer-Akh5Nrwl7o"
 ```
 
 ## Things to know
@@ -203,11 +265,34 @@ python3 tools/moviebox_scraper.py --trending --limit 10 --delay 5
 Use `--delay 5` (seconds between calls) for bulk scraping to stay clear of
 the rate limit. Run it with `--help` for the full list of options.
 
+## Media proxy (optional)
+
+`proxy.js` is a standalone companion server for the referer problem: browsers
+fetching the MP4 links directly get 403/429 because they cannot send the
+required Referer. The proxy relays the bytes with the right headers, Range
+passthrough and clean download filenames:
+
+```bash
+node proxy.js            # PORT + PROXY_PATH env or config.json
+
+# then
+curl -OJ "http://localhost:3000/dl?url=<signed-mp4-url>&name=Movie_1080P.mp4"
+```
+
+Set `PROXY_PATH` (or `config.json`'s `pathPrefix`) to a random string to move
+all routes under `/<prefix>/` so scanners cannot find the proxy. `url` must
+point at an allowlisted CDN host; `dp` optionally rebuilds the Referer as the
+matching play page.
+
+Deploy it on any small Node host and keep the API itself on a serverless
+platform - the API only ever moves JSON, the proxy only moves media bytes.
+
 ## Project layout
 
 ```
 Moviebox-API/
 |-- server.js              # standalone Node server (node server.js)
+|-- proxy.js               # optional standalone media proxy (node proxy.js)
 |-- api/                   # Vercel serverless entry points (thin wrappers)
 |-- lib/                   # endpoint logic shared by server.js and api/
 |-- tools/
