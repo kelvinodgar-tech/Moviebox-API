@@ -1,20 +1,26 @@
 /* pf-dl - Cloudflare pass-through worker fronting the PropFlix media relay.
  *
  * Why: the relay lives on a bare host:port with no TLS, so the browser's
- * download UI used to record that host (or a raw IP) as the download source.
- * This worker gives the download a clean https origin - the browser records
- * pf-dl.<account>.workers.dev, the transfer is TLS end-to-end to the edge,
- * and the whole insecure /go mixed-content dance becomes unnecessary.
+ * download UI used to record that host (or a raw IP) as the download source,
+ * and the /go landing page had to be served from an insecure origin just to
+ * dodge mixed-content download blocking. This worker gives the whole hand-off
+ * a clean https origin: the browser records pf-dl.<account>.workers.dev as
+ * the download source, every hop is TLS to the edge, and no mixed-content
+ * dance is needed.
  *
  * Behavior:
  *  - forwards GET/HEAD/OPTIONS with the Range/UA headers download managers
  *    and players actually need (Referer intentionally dropped: the relay
  *    does not read it, and it would only leak page context);
- *  - streams the relay's response body through untouched (multi-GB movies
- *    pass through with negligible CPU: this worker never buffers);
+ *  - streams the relay's response bodies through untouched (multi-GB movies
+ *    pass with negligible CPU: media responses are never buffered);
  *  - passes the relay's renew 302s through UNFOLLOWED (redirect: "manual")
  *    so a paused download's resume chain still reaches the site for a fresh
  *    link and comes back here to complete;
+ *  - rewrites the relay's own origin (and the legacy IP/dh origins) to THIS
+ *    worker's https origin inside the small /go landing + error HTML pages,
+ *    so the landing page's download link stays same-origin https even while
+ *    the relay still runs its older http-only code;
  *  - copies exactly the response headers that matter (attachment naming,
  *    ranges, CORS, no-store).
  *
@@ -23,6 +29,12 @@
  */
 
 const ORIGIN = "http://sftp.fr-node-42.katabump.com:20274"; // PropFlix media relay (hostname: Cloudflare Workers cannot fetch IP-literal origins - error 1003)
+
+const LEGACY_ORIGINS = [
+  "http://sftp.fr-node-42.katabump.com:20274",
+  "http://fr-node-42.katabump.fr:20274",
+  "http://193.70.34.27:20274",
+];
 
 const FORWARD_REQ_HEADERS = [
   "range",
@@ -81,6 +93,22 @@ export default {
       if (v) out.set(h, v);
     }
     if (!out.has("cache-control")) out.set("cache-control", "no-store");
+
+    // Landing/error pages: rewrite the relay's insecure origins to this
+    // worker's https origin so the download link the page navigates to is
+    // same-origin TLS. These pages are a few KB - buffering them is free.
+    const ct = (resp.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("text/html") && request.method !== "HEAD" && resp.body) {
+      let html = await resp.text();
+      for (const legacy of LEGACY_ORIGINS) {
+        if (legacy !== incoming.origin) {
+          html = html.split(legacy).join(incoming.origin);
+        }
+      }
+      out.set("content-length", String(new TextEncoder().encode(html).length));
+      return new Response(html, { status: resp.status, headers: out });
+    }
+
     return new Response(resp.body, { status: resp.status, headers: out });
   },
 };
