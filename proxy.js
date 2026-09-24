@@ -1,4 +1,4 @@
-// Standalone media proxy v5 (zero npm dependencies, Node 18+).
+// Standalone media proxy v4 (zero npm dependencies, Node 18+).
 //
 // The MP4 links the API returns are signed but also referer-gated: browsers
 // requesting them directly get 403/429 because the Referer does not point at
@@ -73,6 +73,45 @@
 //      probes the hostname with a 1-byte range request first and falls back
 //      to the IP form whenever the probe does not answer.
 //
+// v5 additions (server-side renew + lifetime stats):
+//   1) SERVER-SIDE RENEW. When a paused download resumes after the signed
+//      CDN link expired, the relay used to 302 the download manager to the
+//      site's re-resolve endpoint, which 302'd back with a fresh link.
+//      Mobile download managers DROP the Range header across those
+//      cross-origin redirects, and a range-less fresh link answers with a
+//      full-file 200 that appending managers splice onto the partial file:
+//      the classic "resumed download jumps from 25MB to 40MB and is
+//      corrupt". The relay now completes the whole renew chain ITSELF:
+//      it fetches the site's re-resolve endpoint (auto=1) with
+//      redirect:manual, resolves the fresh token out of the redirect's
+//      Location, and re-requests the upstream with the ORIGINAL Range -
+//      the browser receives ONE clean 206/200 answer and never sees a
+//      redirect. One internal renew per request; a second stale bounce
+//      surfaces as a friendly error page instead of another bounce.
+//   2) LIFETIME STATS. Counters (served/bytes/go/renews) persist to
+//      stats.json next to this file so transfer totals survive restarts;
+//      the status route reports both since-boot and lifetime numbers.
+//
+// v6 additions (verified chunked serving - merged from the undeployed v5
+// chunk engine after the CF-worker front was removed by owner directive):
+//   Live diagnosis (2026-09-24, prior session): the CDN INTERMITTENTLY
+//   answers an open-ended ranged request (bytes=X-) with perfect headers
+//   (206, correct Content-Range and Content-Length) but a body whose bytes
+//   are NOT the file's bytes at X. A manager that resumes appends those
+//   wrong bytes at the pause offset: full file size, "complete", corrupt
+//   content. Bounded ranges (bytes=X-Y) tested correct every time. So:
+//     - the relay NEVER sends the CDN an open-ended range; every transfer
+//       is served in bounded 16 MiB slices with exact header checks;
+//     - each slice's head is cross-checked against an independent tiny
+//       bounded fetch - only a POSITIVE mismatch (two reads disagreeing)
+//       stops a slice; an unverifiable check (429/5xx on the verify fetch)
+//       proceeds, never fails a healthy transfer;
+//     - a slice that ends short is re-fetched for just the missing tail;
+//       exhausted retries destroy the client socket so the download
+//       manager restarts/resumes instead of finalizing a corrupt file;
+//     - mid-transfer staleness destroys the socket too - the manager's
+//       re-request hits the v5 server-side renew BEFORE any byte is served.
+//
 // `url` must be a signed link from an API response (the host must be on the
 // allowlist). `dp` optionally rebuilds the Referer as the matching play page;
 // otherwise the site root is used, which the CDN also accepts.
@@ -91,35 +130,15 @@ const UA =
 const ALLOW_SUFFIX = process.env.CDN_ALLOW_SUFFIX || ".hakunaymatata.com";
 const CONNECT_TIMEOUT_MS = 20000;
 const PROBE_TIMEOUT_MS = 15000;
+const RENEW_TIMEOUT_MS = 25000; // site re-resolve (scrape) can take a while
+// v6 verified-chunk engine:
+const CHUNK_SIZE = 16 * 1024 * 1024; // upstream slices are fetched in 16 MiB bounded ranges
+const VERIFY_BYTES = 64 * 1024; // head of each chunk is cross-checked against an independent fetch
+const CHUNK_RETRIES = 3; // fresh-connection retries per chunk before giving up
+const STREAM_IDLE_MS = 5000; // no upstream data for this long => treat the body as ended (tail-refetch)
 const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // nominal link lifetime (renew keeps older tokens usable)
 const RENEW_TTL_MS = 72 * 60 * 60 * 1000; // hard stop: links this old must be re-clicked on the site
 const READY_TTL_MS = 15 * 60 * 1000; // nonce -> started records live this long
-
-/* ===== v5: verified chunked serving ======================================
- * Live diagnosis (2026-09-24): the CDN intermittently answers an open-ended
- * ranged request (bytes=X-) with PERFECT headers (206, correct Content-Range,
- * correct Content-Length) but a body whose bytes are NOT the file's bytes at
- * X. A browser that pauses a download and resumes appends those wrong bytes
- * at the pause offset: the file reaches its full size, "completes", and then
- * plays corrupt / stops part-way - exactly the owner-reported bug. Bounded
- * ranges (bytes=X-Y) tested correct every time.
- *
- * So v5 NEVER sends the CDN an open-ended range. Every transfer is served in
- * bounded chunks, and every chunk is VERIFIED before its bytes are trusted:
- *   - the chunk response must be 206 with Content-Range starting exactly at
- *     the requested offset, and must deliver exactly the requested length;
- *   - the chunk's first VERIFY_BYTES are re-fetched in an independent tiny
- *     bounded request and compared - a mismatching body (the corruption
- *     signature) triggers a retry on a fresh connection;
- *   - a chunk that ends short is re-fetched for just the missing tail;
- *   - exhausted retries destroy the client socket (never a clean end): the
- *     download manager then restarts/resumes instead of finalizing a file
- *     whose bytes were never verified.
- */
-const CHUNK_SIZE = 16 * 1024 * 1024; // upstream slices are fetched in 16 MiB bounded ranges
-const VERIFY_BYTES = 64 * 1024; // head of each chunk is cross-checked against an independent fetch (capped)
-const CHUNK_RETRIES = 3; // fresh-connection retries per chunk before giving up
-const STREAM_IDLE_MS = 5000; // no upstream data for this long => treat the body as ended (tail-refetch)
 
 function readConfig() {
   const out = { pathPrefix: "", linkKey: "" };
@@ -143,7 +162,35 @@ const LINK_KEY_HEX = (process.env.LINK_KEY || CONFIG.linkKey).replace(/[^0-9a-f]
 const LINK_KEY =
   LINK_KEY_HEX.length === 64 ? Buffer.from(LINK_KEY_HEX, "hex") : null;
 const startedAt = Date.now();
-const stats = { served: 0, bytes: 0, errors: 0, go: 0, shortfalls: 0, chunkRetries: 0, chunkErrors: 0, verifyMismatches: 0 };
+const stats = { served: 0, bytes: 0, errors: 0, go: 0, shortfalls: 0, renews: 0, chunkRetries: 0, chunkErrors: 0, verifyMismatches: 0 };
+
+/* ===== lifetime stats (persisted across restarts) ======================= */
+const STATS_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "stats.json");
+let lifetime = { served: 0, bytes: 0, go: 0, renews: 0, shortfalls: 0, savedAt: 0 };
+try {
+  lifetime = { ...lifetime, ...JSON.parse(fs.readFileSync(STATS_FILE, "utf8")) };
+} catch {}
+let statsSnapshot = { served: 0, bytes: 0, go: 0, renews: 0, shortfalls: 0 };
+function persistStats() {
+  for (const k of Object.keys(statsSnapshot)) {
+    lifetime[k] = (lifetime[k] || 0) + (stats[k] || 0) - statsSnapshot[k];
+  }
+  statsSnapshot = { served: stats.served, bytes: stats.bytes, go: stats.go, renews: stats.renews, shortfalls: stats.shortfalls };
+  lifetime.savedAt = Date.now();
+  try {
+    fs.writeFileSync(STATS_FILE, JSON.stringify(lifetime));
+  } catch {}
+}
+if (typeof setInterval !== "undefined") {
+  setInterval(persistStats, 60_000).unref?.();
+}
+process.on("exit", () => {
+  try { persistStats(); } catch {}
+});
+process.on("SIGTERM", () => {
+  try { persistStats(); } catch {}
+  process.exit(0);
+});
 
 /* ===== download-started registry (nonce -> timestamp) ==================== */
 const startedNonces = new Map();
@@ -246,20 +293,61 @@ function resolveTarget(query) {
   };
 }
 
-/** 302 to the calling site's re-resolve endpoint. The browser download
- * manager follows the chain (site re-resolves -> 302 back to a FRESH relay
- * link) so a paused download resumes seamlessly even after the signed CDN
- * link behind the token expired - instead of failing and leaving a
- * half-written file that plays corrupt up to the pause point. */
-function renewRedirect(req, res, renewPath) {
+/** Server-side renew: fetch the calling site's re-resolve endpoint ourselves
+ * (the token's `c` path with auto=1), extract the FRESH link out of its
+ * redirect, and return it as a new target. The browser never sees a
+ * redirect: mobile download managers drop the Range header across
+ * cross-origin redirects, and a range-less fresh link answers with a
+ * full-file 200 that appending managers splice onto the partial file (the
+ * classic corrupted-resume). Returns a fresh target or null. */
+async function renewTarget(renewPath, clientRange) {
   const base = String(HOME).replace(/\/+$/, "");
   const sep = renewPath.includes("?") ? "&" : "?";
-  res.writeHead(302, {
-    Location: base + renewPath + sep + "auto=1",
-    "Cache-Control": "no-store",
-    "Referrer-Policy": "no-referrer",
-  });
-  return res.end();
+  const renewUrl = base + renewPath + sep + "auto=1";
+  try {
+    const r = await fetch(renewUrl, {
+      headers: {
+        "User-Agent": UA,
+        Accept: "*/*",
+        ...(clientRange ? { Range: clientRange } : {}),
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(RENEW_TIMEOUT_MS),
+    });
+    try {
+      await r.arrayBuffer();
+    } catch {}
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get("location");
+      if (loc) {
+        try {
+          const locUrl = new URL(loc, renewUrl);
+          // The fresh /dl coordinates, whatever public origin they carry:
+          // resolve the token LOCALLY instead of hairpinning over the net.
+          const fresh = resolveTarget(locUrl.searchParams);
+          if (!fresh.error) return fresh;
+        } catch {}
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** Stale upstream: the CDN refusing the link (403/429 = referer rejected,
+ * 404/410 = expired signature) or serving an HTML error page on a 200. */
+function isStaleResponse(resp) {
+  if ([403, 429, 404, 410].includes(resp.status)) return true;
+  if (resp.status === 200) {
+    const ct = String(resp.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("text/html")) return true;
+  }
+  return false;
+}
+
+async function drainBody(resp) {
+  try {
+    await resp.arrayBuffer();
+  } catch {}
 }
 
 /** PropFlix-internal return path for the /go auto-return. Strict whitelist:
@@ -273,15 +361,11 @@ function sanitizeBackPath(raw) {
   return s;
 }
 
-/** Preferred download origin for /go's dh param: a plain http or https
- * origin (scheme + host[:port]) and nothing else - no userinfo, path or
- * query. https origins are how the Cloudflare pass-through worker fronts the
- * relay (see the pf-dl worker in the Moviebox-API repo): the browser then
- * records the worker's hostname as the download source, and the download
- * itself is TLS - no mixed-content dance needed at all. */
+/** Preferred download origin for /go's dh param: a plain http origin
+ * (scheme + host[:port]) and nothing else - no userinfo, path or query. */
 function sanitizeOrigin(raw) {
   const s = String(raw || "").trim();
-  if (!/^https?:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/i.test(s)) return "";
+  if (!/^http:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/i.test(s)) return "";
   if (s.length > 100) return "";
   return s;
 }
@@ -434,9 +518,8 @@ async function fetchUpstream(target, rangeHeader, playReferer, controller) {
     "User-Agent": UA,
     Accept: "*/*",
     Referer: playReferer,
-    // Probe with an open-ended range even when the client sent none: a 206
-    // answer carries Content-Range (total size) and a 200 answer carries
-    // Content-Length - either way the response is size-transparent.
+    // v6: callers always pass a BOUNDED range (open-ended ranges are the
+    // corruption vector this engine exists to avoid).
     Range: rangeHeader || "bytes=0-",
   };
   let up = await fetch(target, { headers, redirect: "follow", signal: controller.signal });
@@ -453,380 +536,7 @@ async function fetchUpstream(target, rangeHeader, playReferer, controller) {
   return up;
 }
 
-async function relay(req, res, query, forceDownload) {
-  const target = resolveTarget(query);
-  if (target.error) return sendJson(req, res, 400, { error: target.error });
-
-  let upstreamUrl;
-  try {
-    upstreamUrl = new URL(target.url);
-  } catch {
-    return sendJson(req, res, 400, { error: "Missing or invalid url parameter" });
-  }
-  if (!/^https?:$/.test(upstreamUrl.protocol) || !upstreamUrl.hostname.endsWith(ALLOW_SUFFIX)) {
-    return sendJson(req, res, 403, { error: "Host not allowed" });
-  }
-
-  const dp = String(target.dp || "").replace(/[^a-z0-9-]/gi, "");
-  const playReferer = dp ? `${SITE}/play/${dp}` : `${SITE}/`;
-  // Landing-page readiness nonce (harmless for probes/server-side callers).
-  const nonce = String(query.get("n") || "").replace(/[^a-f0-9]/gi, "").slice(0, 32);
-
-  const clientRange = req.headers.range || "";
-  const isHead = req.method === "HEAD";
-
-  const controller = new AbortController();
-  const abortUpstream = () => {
-    try {
-      controller.abort();
-    } catch {}
-  };
-  res.on("close", abortUpstream);
-
-  /** Stale-link handling BEFORE any byte reaches the client: the CDN refusing
-   * the link (403/429 = referer rejected, 404/410 = expired signature) or
-   * serving an HTML edge-error as a 200 means the signed URL went stale. With
-   * renew coordinates in the token, bounce the download manager to the site
-   * for a fresh link (paused downloads then COMPLETE instead of dying
-   * half-written); otherwise relay a friendly page, not the upstream noise. */
-  const staleRespond = async (up) => {
-    try {
-      await up.arrayBuffer();
-    } catch {}
-    stats.errors++;
-    if (target.renew) return renewRedirect(req, res, target.renew);
-    return sendHtmlError(
-      req,
-      res,
-      503,
-      "This download link has expired",
-      "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
-    );
-  };
-
-  /* ---- v5 step 1: size probe (bytes=0-0; open-ended ranges NEVER used) ---- */
-  let total = null;
-  let upMeta = {};
-  {
-    const probeCtrl = new AbortController();
-    const pt = setTimeout(() => probeCtrl.abort(), PROBE_TIMEOUT_MS);
-    let probe;
-    try {
-      probe = await fetchUpstream(upstreamUrl, "bytes=0-0", playReferer, probeCtrl);
-    } catch (e) {
-      clearTimeout(pt);
-      stats.errors++;
-      return sendJson(req, res, 502, {
-        error: "Upstream fetch failed",
-        detail: String(e.cause || e.message || "").slice(0, 200),
-      });
-    }
-    clearTimeout(pt);
-    if ([403, 429, 404, 410].includes(probe.status)) {
-      return staleRespond(probe);
-    }
-    {
-      const ct = String(probe.headers.get("content-type") || "").toLowerCase();
-      if (probe.status === 200 && ct.includes("text/html")) {
-        return staleRespond(probe);
-      }
-    }
-    if (probe.status === 206) {
-      const pr = parseContentRange(probe.headers.get("content-range"));
-      if (pr) total = pr.total;
-    } else if (probe.status === 200) {
-      const cl = probe.headers.get("content-length");
-      if (cl && Number(cl) > 0) total = Number(cl);
-    }
-    upMeta = {
-      contentType: probe.headers.get("content-type"),
-      lastModified: probe.headers.get("last-modified"),
-      etag: probe.headers.get("etag"),
-    };
-    try {
-      await probe.arrayBuffer();
-    } catch {}
-  }
-
-  /* ---- v5 step 2: resolve the client's requested slice -------------------- */
-  let start = 0;
-  let end = null; // null = to the end of the file
-  let rangeOk = false;
-  {
-    const m = String(clientRange).match(/^bytes=(\d*)-(\d*)\s*$/);
-    if (clientRange && m && (m[1] || m[2])) {
-      rangeOk = true;
-      if (m[1]) {
-        start = Number(m[1]);
-        end = m[2] ? Number(m[2]) : null;
-      } else {
-        // suffix range: last N bytes
-        const n = Number(m[2]);
-        if (total && n > 0) start = Math.max(0, total - n);
-      }
-    }
-  }
-  if (total === null) {
-    // No total could be determined (CDN ignored the range probe): fall back
-    // to the legacy single-stream pass-through. Happens only on CDNs without
-    // range support, where byte offsets are meaningless anyway.
-    return legacyRelay(req, res, upstreamUrl, clientRange, playReferer, target,
-      forceDownload, nonce, controller, abortUpstream, staleRespond);
-  }
-  if (start >= total) {
-    // 416 with a usable Content-Range so download managers self-correct
-    res.writeHead(416, {
-      "Content-Range": `bytes */${total}`,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "no-store",
-    });
-    return res.end();
-  }
-  if (end === null || end > total - 1) end = total - 1;
-  const promised = end - start + 1;
-
-  /* ---- v5 step 3: write headers ------------------------------------------- */
-  stats.served++;
-  cors(res);
-  const headers = {
-    "Content-Type": upMeta.contentType || "application/octet-stream",
-    "Accept-Ranges": "bytes",
-    // Never let a cache layer store multi-hundred-MB media responses.
-    "Cache-Control": "no-store",
-  };
-  if (upMeta.lastModified) headers["Last-Modified"] = upMeta.lastModified;
-  if (upMeta.etag) headers["ETag"] = upMeta.etag;
-  if (forceDownload) {
-    headers["Content-Disposition"] = `attachment; filename="${sanitizeName(target.name, target.url)}"`;
-  }
-  if (rangeOk) {
-    headers["Content-Range"] = `bytes ${start}-${end}/${total}`;
-    headers["Content-Length"] = String(promised);
-  } else {
-    headers["Content-Length"] = String(total);
-  }
-  res.writeHead(rangeOk ? 206 : 200, headers);
-  // Headers are on the wire: the download now belongs to the browser's
-  // download manager - tell the landing page it may send the user back.
-  if (forceDownload) markStarted(nonce);
-
-  if (isHead) {
-    res.end();
-    return;
-  }
-
-  /* ---- v5 step 4: verified chunked transfer ------------------------------- */
-  let served = 0;
-  const fail = () => {
-    stats.errors++;
-    try {
-      res.destroy();
-    } catch {}
-  };
-  /** Write with real backpressure; resolves false when the client is gone. */
-  const writeBuf = (buf) =>
-    new Promise((resolve) => {
-      if (res.destroyed || res.writableEnded) return resolve(false);
-      let settled = false;
-      const finish = (v) => {
-        if (settled) return;
-        settled = true;
-        res.removeListener("close", onClose);
-        res.removeListener("drain", onDrain);
-        resolve(v);
-      };
-      const onClose = () => finish(false);
-      const onDrain = () => finish(true);
-      res.once("close", onClose);
-      if (res.write(buf)) {
-        finish(true);
-      } else {
-        res.once("drain", onDrain);
-      }
-    });
-
-  for (let c0 = start; c0 <= end; ) {
-    if (res.destroyed || res.writableEnded) return;
-    const c1 = Math.min(c0 + CHUNK_SIZE - 1, end);
-    const want = c1 - c0 + 1;
-
-    /* fetch + verify one chunk (fresh connection per attempt) */
-    let ok = false;
-    let written = 0;
-    for (let attempt = 0; attempt <= CHUNK_RETRIES && !ok; attempt++) {
-      if (res.destroyed || res.writableEnded) return;
-      if (attempt > 0) stats.chunkRetries = (stats.chunkRetries || 0) + 1;
-      let up;
-      try {
-        up = await fetchUpstream(upstreamUrl, `bytes=${c0}-${c1}`, playReferer, controller);
-      } catch {
-        stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-        continue;
-      }
-      if ([403, 429, 404, 410].includes(up.status)) {
-        // Mid-transfer staleness cannot redirect (headers are already on the
-        // wire): destroy so the download manager re-requests, and the NEXT
-        // relay pass takes the renew bounce before any byte is served.
-        try { await up.arrayBuffer(); } catch {}
-        stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-        fail();
-        return;
-      }
-      {
-        const ct = String(up.headers.get("content-type") || "").toLowerCase();
-        if (up.status === 200 && ct.includes("text/html")) {
-          try { await up.arrayBuffer(); } catch {}
-          stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-          fail();
-          return;
-        }
-        if (up.status !== 206) {
-          // A bounded range must answer 206; a 200 means the CDN ignored the
-          // range - retry on a fresh connection before trusting anything.
-          try { await up.arrayBuffer(); } catch {}
-          stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-          continue;
-        }
-      }
-      const cr = parseContentRange(up.headers.get("content-range"));
-      if (!cr || cr.start !== c0) {
-        try { await up.arrayBuffer(); } catch {}
-        stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-        continue;
-      }
-
-      // Stream through ONE Node Readable (async iterator - no double readers)
-      const stream = Readable.fromWeb(up.body);
-      const it = stream[Symbol.asyncIterator]();
-      const next = idleReader(it, STREAM_IDLE_MS);
-
-      // Peek the chunk head, verify against an independent tiny fetch
-      let head = Buffer.alloc(0);
-      try {
-        while (head.length < VERIFY_BYTES) {
-          const r = await next();
-          if (r.done || r.idle) break;
-          head = Buffer.concat([head, Buffer.from(r.value)]);
-        }
-      } catch {
-        // truncated stream mid-peek: keep whatever arrived (the tail-refetch
-        // below continues from `written` once the iterator is exhausted)
-      }
-      if (head.length === 0) {
-        stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-        endIter(it)
-        continue;
-      }
-      const headOk = await verifyHead(upstreamUrl, playReferer, controller, c0, head);
-      if (!headOk) {
-        stats.verifyMismatches = (stats.verifyMismatches || 0) + 1;
-        endIter(it)
-        continue; // corruption signature: fresh-connection retry
-      }
-
-      // Verified: stream this chunk (head first, exact byte count)
-      written = 0;
-      ok = true;
-      const writePiece = async (piece) => {
-        const room = want - written;
-        if (room <= 0) return true;
-        const out = piece.length > room ? piece.subarray(0, room) : piece;
-        written += out.length;
-        served += out.length;
-        stats.bytes += out.length;
-        return writeBuf(out);
-      };
-      if (!(await writePiece(head))) { endIter(it); return; }
-      while (written < want) {
-        if (res.destroyed || res.writableEnded) { endIter(it); return; }
-        let r;
-        try {
-          r = await next();
-        } catch {
-          break; // upstream stream error: fall into the tail-refetch below
-        }
-        if (r.done || r.idle) break; // ended, errored or stalled: tail-refetch
-        if (!(await writePiece(Buffer.from(r.value)))) { endIter(it); return; }
-      }
-      // Short body (upstream ended early / errored): fetch JUST the missing
-      // tail as fresh bounded ranges and keep going; never write unverified
-      // gaps and never finalize short.
-      while (written < want) {
-        if (res.destroyed || res.writableEnded) return;
-        const missingFrom = c0 + written;
-        const missingTo = c1;
-        let tailUp = null;
-        for (let t = 0; t <= CHUNK_RETRIES && !tailUp; t++) {
-          try {
-            const tu = await fetchUpstream(upstreamUrl, `bytes=${missingFrom}-${missingTo}`, playReferer, controller);
-            if (tu.status === 206) {
-              const tcr = parseContentRange(tu.headers.get("content-range"));
-              if (tcr && tcr.start === missingFrom) {
-                tailUp = tu;
-                break;
-              }
-            }
-            try { await tu.arrayBuffer(); } catch {}
-          } catch {}
-          stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-        }
-        if (!tailUp) { fail(); return; }
-        const tstream = Readable.fromWeb(tailUp.body);
-        const tit = tstream[Symbol.asyncIterator]();
-        const tnext = idleReader(tit, STREAM_IDLE_MS);
-        // verify the tail's head too (it resumes mid-chunk)
-        let thead = Buffer.alloc(0);
-        try {
-          while (thead.length < VERIFY_BYTES && written + thead.length < want) {
-            const r = await tnext();
-            if (r.done || r.idle) break;
-            thead = Buffer.concat([thead, Buffer.from(r.value)]);
-          }
-        } catch {}
-        if (thead.length === 0) {
-          stats.chunkErrors = (stats.chunkErrors || 0) + 1;
-          endIter(tit)
-          continue;
-        }
-        const tailOk = await verifyHead(upstreamUrl, playReferer, controller, missingFrom, thead);
-        if (!tailOk) {
-          stats.verifyMismatches = (stats.verifyMismatches || 0) + 1;
-          endIter(tit)
-          continue;
-        }
-        if (!(await writePiece(thead))) { endIter(tit); return; }
-        while (written < want) {
-          if (res.destroyed || res.writableEnded) { endIter(tit); return; }
-          let r;
-          try {
-            r = await tnext();
-          } catch {
-            break;
-          }
-          if (r.done || r.idle) break;
-          if (!(await writePiece(Buffer.from(r.value)))) { endIter(tit); return; }
-        }
-        endIter(tit)
-      }
-      endIter(it)
-    }
-    if (!ok || written < want) { fail(); return; }
-    c0 = c1 + 1;
-  }
-
-  // Exact delivery: a clean end is only allowed when every promised byte was
-  // verified and written (shortfall => destroy, never finalize truncated).
-  if (served < promised) {
-    stats.shortfalls++;
-    fail();
-    return;
-  }
-  try {
-    res.end();
-  } catch {}
-}
-
-/* ===== v5 helpers ========================================================= */
+/* ===== v6 verified-chunk helpers ========================================= */
 
 /** Wrap an async iterator so a read that yields no data within `idleMs`
  * resolves as {idle:true} instead of waiting for the stream's end signal -
@@ -890,49 +600,443 @@ async function readAtMost(webBody, max) {
  * cheapest reliable detector of the wrong-body failure mode. The comparison
  * is on the OVERLAP: a CDN that truncates bodies may shorten either read,
  * and any agreeing prefix still proves the bytes at `offset` are right -
- * while a wrong-body read disagrees from its first bytes. */
+ * while a wrong-body read disagrees from its first bytes.
+ * Verdicts: "ok" (bytes agree), "mismatch" (positive evidence of wrong
+ * bytes - retry the chunk), "skip" (could not verify: 429/5xx/network on
+ * the VERIFY fetch itself - proceed with the chunk, never fail a healthy
+ * transfer for lack of a second opinion). */
 async function verifyHead(upstreamUrl, playReferer, controller, offset, peek) {
   const n = Math.min(peek.length, VERIFY_BYTES);
   const vEnd = offset + n - 1;
   try {
     const v = await fetchUpstream(upstreamUrl, `bytes=${offset}-${vEnd}`, playReferer, controller);
     if (v.status !== 206) {
-      try { await v.arrayBuffer(); } catch {}
-      return v.status === 200 ? false : v.status < 400;
+      await drainBody(v);
+      return "skip"; // range ignored / busy: no usable second opinion
     }
     const vcr = parseContentRange(v.headers.get("content-range"));
     if (!vcr || vcr.start !== offset) {
-      try { await v.arrayBuffer(); } catch {}
-      return false;
+      await drainBody(v);
+      return vcr ? "mismatch" : "skip"; // answering from the wrong offset is corruption
     }
     const vbody = await readAtMost(v.body, n);
     const overlap = Math.min(vbody.length, n);
-    if (overlap === 0) return false;
-    return vbody.subarray(0, overlap).equals(peek.subarray(0, overlap));
+    if (overlap === 0) return "skip";
+    return vbody.subarray(0, overlap).equals(peek.subarray(0, overlap)) ? "ok" : "mismatch";
   } catch {
-    return false;
+    return "skip";
   }
 }
 
-/** Legacy single-stream relay for range-less CDNs (no total size known). */
-async function legacyRelay(req, res, upstreamUrl, clientRange, playReferer, target,
-  forceDownload, nonce, controller, abortUpstream, staleRespond) {
-  const timeout = setTimeout(abortUpstream, CONNECT_TIMEOUT_MS);
+async function relay(req, res, query, forceDownload) {
+  let target = resolveTarget(query);
+  if (target.error) return sendJson(req, res, 400, { error: target.error });
+
+  // Landing-page readiness nonce (harmless for probes/server-side callers).
+  const nonce = String(query.get("n") || "").replace(/[^a-f0-9]/gi, "").slice(0, 32);
+
+  const clientRange = req.headers.range || "";
+  const isHead = req.method === "HEAD";
+
+  const controller = new AbortController();
+  const abortUpstream = () => {
+    try {
+      controller.abort();
+    } catch {}
+  };
+  res.on("close", abortUpstream);
+
+  let renewed = false;
+
+  // hop 0: the link the caller arrived with; hop 1: the internally renewed
+  // link (only when hop 0 came back stale and the token carries renew
+  // coordinates). One renew maximum per request: a second stale bounce
+  // surfaces as a friendly error page, never as another bounce. The whole
+  // renew chain runs INSIDE the relay (v5): the browser's download manager
+  // receives a single clean answer and never follows the cross-origin
+  // redirects that made range-dropping managers append a full-file 200 onto
+  // their partial file (the classic corrupted resume).
+  for (let hop = 0; hop < 2; hop++) {
+    let upstreamUrl;
+    try {
+      upstreamUrl = new URL(target.url);
+    } catch {
+      return sendJson(req, res, 400, { error: "Missing or invalid url parameter" });
+    }
+    if (!/^https?:$/.test(upstreamUrl.protocol) || !upstreamUrl.hostname.endsWith(ALLOW_SUFFIX)) {
+      return sendJson(req, res, 403, { error: "Host not allowed" });
+    }
+
+    const dp = String(target.dp || "").replace(/[^a-z0-9-]/gi, "");
+    const playReferer = dp ? `${SITE}/play/${dp}` : `${SITE}/`;
+
+    // ---- v6 step 1: size probe (bytes=0-0; open-ended ranges NEVER used) --
+    // A 1-byte bounded probe both validates the link before any byte is
+    // served and learns the total size + metadata in one cheap request.
+    let total = null;
+    let upMeta = {};
+    {
+      const connectTimeout = setTimeout(abortUpstream, CONNECT_TIMEOUT_MS);
+      let probe;
+      try {
+        probe = await fetchUpstream(upstreamUrl, "bytes=0-0", playReferer, controller);
+      } catch (e) {
+        clearTimeout(connectTimeout);
+        stats.errors++;
+        return sendJson(req, res, 502, {
+          error: "Upstream fetch failed",
+          detail: String(e.cause || e.message || "").slice(0, 200),
+        });
+      }
+      clearTimeout(connectTimeout);
+      if (isStaleResponse(probe)) {
+        await drainBody(probe);
+        stats.errors++;
+        if (target.renew && !renewed) {
+          renewed = true;
+          stats.renews++;
+          const fresh = await renewTarget(target.renew, clientRange);
+          if (fresh) {
+            target = fresh;
+            continue; // hop 1: probe the fresh link
+          }
+        }
+        return sendHtmlError(
+          req,
+          res,
+          503,
+          "This download link has expired",
+          "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
+        );
+      }
+      if (probe.status === 206) {
+        const pr = parseContentRange(probe.headers.get("content-range"));
+        if (pr) total = pr.total;
+      } else if (probe.status === 200) {
+        const cl = probe.headers.get("content-length");
+        if (cl && Number(cl) > 0) total = Number(cl);
+      }
+      upMeta = {
+        contentType: probe.headers.get("content-type"),
+        lastModified: probe.headers.get("last-modified"),
+        etag: probe.headers.get("etag"),
+      };
+      await drainBody(probe);
+    }
+
+    // ---- v6 step 2: resolve the client's requested slice ------------------
+    let start = 0;
+    let end = null; // null = to the end of the file
+    let rangeOk = false;
+    {
+      const m = String(clientRange).match(/^bytes=(\d*)-(\d*)\s*$/);
+      if (clientRange && m && (m[1] || m[2])) {
+        rangeOk = true;
+        if (m[1]) {
+          start = Number(m[1]);
+          end = m[2] ? Number(m[2]) : null;
+        } else {
+          // suffix range: last N bytes
+          const n = Number(m[2]);
+          if (total && n > 0) start = Math.max(0, total - n);
+        }
+      }
+    }
+
+    if (total === null) {
+      // No total could be determined (CDN ignored the range probe): fall
+      // back to the legacy single-stream pass-through. Happens only on CDNs
+      // without range support, where byte offsets are meaningless anyway.
+      return legacyStream(req, res, upstreamUrl, clientRange, playReferer, target,
+        forceDownload, nonce, controller, abortUpstream, isHead);
+    }
+    if (start >= total) {
+      // 416 with a usable Content-Range so download managers self-correct
+      res.writeHead(416, {
+        "Content-Range": `bytes */${total}`,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+      });
+      return res.end();
+    }
+    if (end === null || end > total - 1) end = total - 1;
+    const promised = end - start + 1;
+
+    // ---- v6 step 3: headers -------------------------------------------------
+    stats.served++;
+    cors(res);
+    const headers = {
+      "Content-Type": upMeta.contentType || "application/octet-stream",
+      "Accept-Ranges": "bytes",
+      // Never let a cache layer store multi-hundred-MB media responses.
+      "Cache-Control": "no-store",
+    };
+    if (upMeta.lastModified) headers["Last-Modified"] = upMeta.lastModified;
+    if (upMeta.etag) headers["ETag"] = upMeta.etag;
+    if (forceDownload) {
+      headers["Content-Disposition"] = `attachment; filename="${sanitizeName(target.name, target.url)}"`;
+    }
+    if (rangeOk) {
+      headers["Content-Range"] = `bytes ${start}-${end}/${total}`;
+      headers["Content-Length"] = String(promised);
+    } else {
+      headers["Content-Length"] = String(total);
+    }
+    res.writeHead(rangeOk ? 206 : 200, headers);
+    // Headers are on the wire: the download now belongs to the browser's
+    // download manager - tell the landing page it may send the user back.
+    if (forceDownload) markStarted(nonce);
+
+    if (isHead) {
+      res.end();
+      return;
+    }
+
+    // ---- v6 step 4: verified chunked transfer -------------------------------
+    // Every byte served comes from a BOUNDED upstream range whose response
+    // headers were checked (206 + Content-Range starting exactly where we
+    // asked), whose head was cross-checked against an independent fetch, and
+    // whose delivery is exact - short bodies trigger a tail refetch, and a
+    // transfer that cannot be completed cleanly is DESTROYED so the download
+    // manager retries instead of finalizing a corrupt file.
+    let served = 0;
+    const fail = () => {
+      stats.errors++;
+      try {
+        res.destroy();
+      } catch {}
+    };
+    /** Write with real backpressure; resolves false when the client is gone. */
+    const writeBuf = (buf) =>
+      new Promise((resolve) => {
+        if (res.destroyed || res.writableEnded) return resolve(false);
+        let settled = false;
+        const finish = (v) => {
+          if (settled) return;
+          settled = true;
+          res.removeListener("close", onClose);
+          res.removeListener("drain", onDrain);
+          resolve(v);
+        };
+        const onClose = () => finish(false);
+        const onDrain = () => finish(true);
+        res.once("close", onClose);
+        if (res.write(buf)) {
+          finish(true);
+        } else {
+          res.once("drain", onDrain);
+        }
+      });
+
+    for (let c0 = start; c0 <= end; ) {
+      if (res.destroyed || res.writableEnded) return;
+      const c1 = Math.min(c0 + CHUNK_SIZE - 1, end);
+      const want = c1 - c0 + 1;
+
+      /* fetch + verify one chunk (fresh connection per attempt) */
+      let ok = false;
+      let written = 0;
+      for (let attempt = 0; attempt <= CHUNK_RETRIES && !ok; attempt++) {
+        if (res.destroyed || res.writableEnded) return;
+        if (attempt > 0) stats.chunkRetries++;
+        let up;
+        try {
+          up = await fetchUpstream(upstreamUrl, `bytes=${c0}-${c1}`, playReferer, controller);
+        } catch {
+          stats.chunkErrors++;
+          continue;
+        }
+        if (isStaleResponse(up)) {
+          // Mid-transfer staleness cannot renew (headers are already on the
+          // wire): destroy so the download manager re-requests, and the NEXT
+          // relay pass takes the server-side renew before any byte is served.
+          await drainBody(up);
+          stats.chunkErrors++;
+          fail();
+          return;
+        }
+        if (up.status !== 206) {
+          // A bounded range must answer 206; a 200 means the CDN ignored the
+          // range - retry on a fresh connection before trusting anything.
+          await drainBody(up);
+          stats.chunkErrors++;
+          continue;
+        }
+        const cr = parseContentRange(up.headers.get("content-range"));
+        if (!cr || cr.start !== c0) {
+          await drainBody(up);
+          stats.chunkErrors++;
+          continue;
+        }
+
+        // Stream through ONE Node Readable (async iterator - no double readers)
+        const stream = Readable.fromWeb(up.body);
+        const it = stream[Symbol.asyncIterator]();
+        const next = idleReader(it, STREAM_IDLE_MS);
+
+        // Peek the chunk head, then cross-check it with an independent tiny
+        // bounded fetch (see verifyHead for the verdict semantics).
+        let head = Buffer.alloc(0);
+        try {
+          while (head.length < VERIFY_BYTES) {
+            const r = await next();
+            if (r.done || r.idle) break;
+            head = Buffer.concat([head, Buffer.from(r.value)]);
+          }
+        } catch {
+          // truncated stream mid-peek: keep whatever arrived (the tail-refetch
+          // below continues from `written` once the iterator is exhausted)
+        }
+        if (head.length === 0) {
+          stats.chunkErrors++;
+          endIter(it);
+          continue;
+        }
+        const verdict = await verifyHead(upstreamUrl, playReferer, controller, c0, head);
+        if (verdict === "mismatch") {
+          stats.verifyMismatches++;
+          endIter(it);
+          continue; // corruption signature: fresh-connection retry
+        }
+        // verdict "ok" or "skip": proceed - only positive evidence of
+        // corruption stops a chunk, never the lack of a second opinion.
+
+        // Verified: stream this chunk (head first, exact byte count)
+        written = 0;
+        ok = true;
+        const writePiece = async (piece) => {
+          const room = want - written;
+          if (room <= 0) return true;
+          const out = piece.length > room ? piece.subarray(0, room) : piece;
+          written += out.length;
+          served += out.length;
+          stats.bytes += out.length;
+          return writeBuf(out);
+        };
+        if (!(await writePiece(head))) { endIter(it); return; }
+        while (written < want) {
+          if (res.destroyed || res.writableEnded) { endIter(it); return; }
+          let r;
+          try {
+            r = await next();
+          } catch {
+            break; // upstream stream error: fall into the tail-refetch below
+          }
+          if (r.done || r.idle) break; // ended, errored or stalled: tail-refetch
+          if (!(await writePiece(Buffer.from(r.value)))) { endIter(it); return; }
+        }
+        // Short body (upstream ended early / errored): fetch JUST the missing
+        // tail as fresh bounded ranges and keep going; never write unverified
+        // gaps and never finalize short.
+        let tailRounds = 0;
+        while (written < want) {
+          if (res.destroyed || res.writableEnded) return;
+          if (++tailRounds > CHUNK_RETRIES + 1) { fail(); return; } // no infinite tail loops
+          const missingFrom = c0 + written;
+          const missingTo = c1;
+          let tailUp = null;
+          for (let t = 0; t <= CHUNK_RETRIES && !tailUp; t++) {
+            try {
+              const tu = await fetchUpstream(upstreamUrl, `bytes=${missingFrom}-${missingTo}`, playReferer, controller);
+              if (tu.status === 206) {
+                const tcr = parseContentRange(tu.headers.get("content-range"));
+                if (tcr && tcr.start === missingFrom) {
+                  tailUp = tu;
+                  break;
+                }
+              }
+              await drainBody(tu);
+            } catch {}
+            stats.chunkErrors++;
+          }
+          if (!tailUp) { fail(); return; }
+          const tstream = Readable.fromWeb(tailUp.body);
+          const tit = tstream[Symbol.asyncIterator]();
+          const tnext = idleReader(tit, STREAM_IDLE_MS);
+          // verify the tail's head too (it resumes mid-chunk)
+          let thead = Buffer.alloc(0);
+          try {
+            while (thead.length < VERIFY_BYTES && written + thead.length < want) {
+              const r = await tnext();
+              if (r.done || r.idle) break;
+              thead = Buffer.concat([thead, Buffer.from(r.value)]);
+            }
+          } catch {}
+          if (thead.length === 0) {
+            stats.chunkErrors++;
+            endIter(tit);
+            continue;
+          }
+          const tverdict = await verifyHead(upstreamUrl, playReferer, controller, missingFrom, thead);
+          if (tverdict === "mismatch") {
+            stats.verifyMismatches++;
+            endIter(tit);
+            continue;
+          }
+          if (!(await writePiece(thead))) { endIter(tit); return; }
+          while (written < want) {
+            if (res.destroyed || res.writableEnded) { endIter(tit); return; }
+            let r;
+            try {
+              r = await tnext();
+            } catch {
+              break;
+            }
+            if (r.done || r.idle) break;
+            if (!(await writePiece(Buffer.from(r.value)))) { endIter(tit); return; }
+          }
+          endIter(tit);
+        }
+        endIter(it);
+      }
+      if (!ok || written < want) { fail(); return; }
+      c0 = c1 + 1;
+    }
+
+    // Exact delivery: a clean end is only allowed when every promised byte
+    // was verified and written (shortfall => destroy, never finalize short).
+    if (served < promised) {
+      stats.shortfalls++;
+      fail();
+      return;
+    }
+    try {
+      res.end();
+    } catch {}
+    return;
+  }
+
+  // Unreachable in practice: every loop path either serves or returns.
+  return sendJson(req, res, 500, { error: "No upstream response" });
+}
+
+/** Legacy single-stream relay for range-less CDNs (no total size known):
+ * the pre-v6 pass-through with exact-size headers and the shortfall guard. */
+async function legacyStream(req, res, upstreamUrl, clientRange, playReferer, target,
+  forceDownload, nonce, controller, abortUpstream, isHead) {
+  const connectTimeout = setTimeout(abortUpstream, CONNECT_TIMEOUT_MS);
   let up;
   try {
     up = await fetchUpstream(upstreamUrl, clientRange, playReferer, controller);
   } catch (e) {
-    clearTimeout(timeout);
+    clearTimeout(connectTimeout);
     stats.errors++;
     return sendJson(req, res, 502, {
       error: "Upstream fetch failed",
       detail: String(e.cause || e.message || "").slice(0, 200),
     });
   }
-  clearTimeout(timeout);
-  if ([403, 429, 404, 410].includes(up.status) || (up.status === 200 &&
-      String(up.headers.get("content-type") || "").toLowerCase().includes("text/html"))) {
-    return staleRespond(up);
+  clearTimeout(connectTimeout);
+  if (isStaleResponse(up)) {
+    await drainBody(up);
+    stats.errors++;
+    return sendHtmlError(
+      req,
+      res,
+      503,
+      "This download link has expired",
+      "The file link was only valid for a couple of hours. Close this tab, reload the download page and click Download again for a fresh link.",
+    );
   }
 
   stats.served++;
@@ -947,15 +1051,19 @@ async function legacyRelay(req, res, upstreamUrl, clientRange, playReferer, targ
   if (forceDownload) {
     headers["Content-Disposition"] = `attachment; filename="${sanitizeName(target.name, target.url)}"`;
   }
+
   let status = up.status;
+  let promised = 0;
   const rangeInfo = up.status === 206 ? parseContentRange(up.headers.get("content-range")) : null;
   const contentLength = up.headers.get("content-length");
-  let promised = 0;
+
   if (status === 206 && rangeInfo) {
     promised = rangeInfo.end - rangeInfo.start + 1;
     headers["Content-Length"] = String(promised);
     headers["Content-Range"] = `bytes ${rangeInfo.start}-${rangeInfo.end}/${rangeInfo.total}`;
     if (!clientRange && rangeInfo.start === 0 && rangeInfo.end === rangeInfo.total - 1) {
+      // Client asked for no range but got a full-file 206: deliver it as a
+      // clean 200 with the total size so progress shows "25 / 357 MB".
       status = 200;
       delete headers["Content-Range"];
       headers["Content-Length"] = String(rangeInfo.total);
@@ -964,13 +1072,20 @@ async function legacyRelay(req, res, upstreamUrl, clientRange, playReferer, targ
     promised = Number(contentLength);
     headers["Content-Length"] = String(promised);
   }
+  // else: no size could be determined (rare) - stream as-is; the shortfall
+  // guard below stays inactive because nothing was promised.
+
   if (!headers["Content-Type"]) headers["Content-Type"] = "application/octet-stream";
   res.writeHead(status, headers);
   if (forceDownload) markStarted(nonce);
-  if (req.method === "HEAD" || !up.body) {
+
+  if (isHead || !up.body) {
     res.end();
     return;
   }
+
+  // Shortfall guard: clean-end short of the promise destroys the socket so
+  // managers retry with a Range request instead of finalizing truncated.
   let written = 0;
   const body = Readable.fromWeb(up.body);
   const pump = async () => {
@@ -1005,6 +1120,8 @@ async function legacyRelay(req, res, upstreamUrl, clientRange, playReferer, targ
   });
 }
 
+
+
 const server = http.createServer(async (req, res) => {
   let url;
   try {
@@ -1028,16 +1145,24 @@ const server = http.createServer(async (req, res) => {
     if (!ROOT || pathname === ROOT) {
       return sendJson(req, res, 200, {
         status: "ok",
-        version: 5,
+        version: 6,
         uptime: Math.floor((Date.now() - startedAt) / 1000),
         served: stats.served,
         bytes: stats.bytes,
         go: stats.go,
+        renews: stats.renews,
         shortfalls: stats.shortfalls,
         chunkRetries: stats.chunkRetries,
         chunkErrors: stats.chunkErrors,
         verifyMismatches: stats.verifyMismatches,
         tokens: LINK_KEY ? "aes-256-gcm" : "off",
+        lifetime: {
+          served: lifetime.served,
+          bytes: lifetime.bytes,
+          go: lifetime.go,
+          renews: lifetime.renews,
+          shortfalls: lifetime.shortfalls,
+        },
       });
     }
     if (ROOT && pathname !== ROOT && !pathname.startsWith(ROOT + "/")) {
@@ -1110,5 +1235,5 @@ process.on("unhandledRejection", (e) => console.error("unhandledRejection:", Str
 
 const port = parseInt(process.env.PORT || process.env.SERVER_PORT || "3000", 10);
 server.listen(port, () => {
-  console.log(`media proxy v5 listening on :${port} (prefix ${PREFIX ? "/" + PREFIX : "none"}, tokens ${LINK_KEY ? "on" : "off"})`);
+  console.log(`media proxy v6 listening on :${port} (prefix ${PREFIX ? "/" + PREFIX : "none"}, tokens ${LINK_KEY ? "on" : "off"})`);
 });
