@@ -321,4 +321,4 @@ API then lives at `https://<your-project>.vercel.app/api/...`.
 
 ## License
 
-MIT. Use it however you want.
+MIT. Use it however you want
