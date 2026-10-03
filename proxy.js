@@ -112,6 +112,21 @@
 //     - mid-transfer staleness destroys the socket too - the manager's
 //       re-request hits the v5 server-side renew BEFORE any byte is served.
 //
+// v7 additions (long-pause reliability + HTTPS origins):
+//   1) RENEW_TTL 72h -> 14 days. The owner's failure mode: a download left
+//      paused for DAYS resumed into a dead token ("bad token" 400) and could
+//      never complete - the partial file then gets watched as a corrupt
+//      movie. A renewable window of two weeks covers every realistic pause;
+//      the CDN link behind an old token is refreshed by the v5 server-side
+//      renew, so age no longer matters until the hard stop.
+//   2) HTTPS ORIGINS. The relay now fronts a TLS host (stream.propflix.name.ng
+//      -> CDN77/CF-style proxy -> this HTTP port). /go therefore may be
+//      served over HTTPS: `dh` may be an https:// origin, and the landing
+//      page's own-origin fallback derives its scheme from X-Forwarded-Proto
+//      so an https /go page never hands the browser an http download (a
+//      mixed-content download block, or plain-HTTP carrier middleboxes
+//      splicing junk bytes into multi-hundred-MB movie files).
+
 // `url` must be a signed link from an API response (the host must be on the
 // allowlist). `dp` optionally rebuilds the Referer as the matching play page;
 // otherwise the site root is used, which the CDN also accepts.
@@ -137,7 +152,7 @@ const VERIFY_BYTES = 64 * 1024; // head of each chunk is cross-checked against a
 const CHUNK_RETRIES = 3; // fresh-connection retries per chunk before giving up
 const STREAM_IDLE_MS = 5000; // no upstream data for this long => treat the body as ended (tail-refetch)
 const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // nominal link lifetime (renew keeps older tokens usable)
-const RENEW_TTL_MS = 72 * 60 * 60 * 1000; // hard stop: links this old must be re-clicked on the site
+const RENEW_TTL_MS = 14 * 24 * 60 * 60 * 1000; // hard stop: links this old must be re-clicked on the site
 const READY_TTL_MS = 15 * 60 * 1000; // nonce -> started records live this long
 
 function readConfig() {
@@ -361,11 +376,14 @@ function sanitizeBackPath(raw) {
   return s;
 }
 
-/** Preferred download origin for /go's dh param: a plain http origin
- * (scheme + host[:port]) and nothing else - no userinfo, path or query. */
+/** Preferred download origin for /go's dh param: a plain http OR https
+ * origin (scheme + host[:port]) and nothing else - no userinfo, path or
+ * query. https origins are how the TLS-fronted relay host hands the browser
+ * a same-scheme /dl URL (mixed-content downloads would otherwise be blocked
+ * when /go itself is served over HTTPS). */
 function sanitizeOrigin(raw) {
   const s = String(raw || "").trim();
-  if (!/^http:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/i.test(s)) return "";
+  if (!/^https?:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/i.test(s)) return "";
   if (s.length > 100) return "";
   return s;
 }
@@ -1145,7 +1163,7 @@ const server = http.createServer(async (req, res) => {
     if (!ROOT || pathname === ROOT) {
       return sendJson(req, res, 200, {
         status: "ok",
-        version: 6,
+        version: 7,
         uptime: Math.floor((Date.now() - startedAt) / 1000),
         served: stats.served,
         bytes: stats.bytes,
@@ -1206,9 +1224,15 @@ const server = http.createServer(async (req, res) => {
       const dlPath = (ROOT || "") + "/dl?" + dlParams.toString();
       // Preferred (hostname) origin for the /dl hand-off: the browser's
       // download UI then records the hostname as the source instead of a raw
-      // IP. The request origin (as navigated, an IP literal that browsers
-      // never https-upgrade) stays the guaranteed fallback.
-      const selfOrigin = `http://${req.headers.host || "localhost"}`;
+      // IP. The request origin stays the guaranteed fallback - its scheme
+      // follows X-Forwarded-Proto (first value wins) so an /go page served
+      // over HTTPS by the TLS front falls back to an HTTPS /dl, never to a
+      // plain-HTTP download a secure page is not allowed to start.
+      const xfp = String(req.headers["x-forwarded-proto"] || "")
+        .split(",")[0]
+        .trim()
+        .toLowerCase();
+      const selfOrigin = `${xfp === "https" ? "https" : "http"}://${req.headers.host || "localhost"}`;
       const dh = sanitizeOrigin(url.searchParams.get("dh"));
       const primary = dh && dh !== selfOrigin ? dh : selfOrigin;
       const dlHref = primary + dlPath;
@@ -1235,5 +1259,5 @@ process.on("unhandledRejection", (e) => console.error("unhandledRejection:", Str
 
 const port = parseInt(process.env.PORT || process.env.SERVER_PORT || "3000", 10);
 server.listen(port, () => {
-  console.log(`media proxy v6 listening on :${port} (prefix ${PREFIX ? "/" + PREFIX : "none"}, tokens ${LINK_KEY ? "on" : "off"})`);
+  console.log(`media proxy v7 listening on :${port} (prefix ${PREFIX ? "/" + PREFIX : "none"}, tokens ${LINK_KEY ? "on" : "off"})`);
 });
