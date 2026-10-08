@@ -86,6 +86,16 @@ _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
+# Bracketed camcorder-quality markers, e.g. "Forgotten Island[CAM]".
+_CAM_RE = re.compile(
+    r"\[\s*(?:cam(?:rip|coder)?|hd\s*ts|ts|telesync|hd\s*tc|tc|telecine"
+    r"|screener|dvd\s*scr(?:eener)?|scr)\s*\]", re.IGNORECASE)
+
+
+def is_cam_title(title):
+    """True when the catalog title carries a CAM-quality marker."""
+    return bool(_CAM_RE.search(str(title or "")))
+
 
 def _build_headers(origin, referer=None, same_origin=False):
     host = urllib.parse.urlparse(origin).hostname or ""
@@ -218,6 +228,7 @@ def extract_all_subjects(home_data):
             if sid and title and str(sid) not in seen:
                 seen.add(str(sid))
                 out.append({"subjectId": str(sid), "title": str(title),
+                            "is_cam": is_cam_title(str(title)),
                             "subjectType": o.get("subjectType"), "detailPath": o.get("detailPath")})
             for v in o.values():
                 walk(v)
@@ -265,7 +276,7 @@ def scrape_movie(subject, origin="https://movieboxonline.net", verbose=True):
     if verbose:
         summary = ", ".join(f'{q["resolution"]}P({"VIP" if q["vipLocked"] else "free"})' for q in qualities)
         print(f"       OK [{source}] {len(qualities)} qualities: {summary}")
-    return {"title": title, "subjectId": sid, "subjectType": 1, "detailPath": dp,
+    return {"title": title, "is_cam": is_cam_title(title), "subjectId": sid, "subjectType": 1, "detailPath": dp,
             "watch_url": f"{origin}/videoPlayPage/{dp}?type=/movie/detail",
             "source": source, "qualities": qualities}
 
@@ -288,7 +299,7 @@ def scrape_tv(subject, origin="https://movieboxonline.net", season_filter=None,
         if verbose:
             print(f"       no seasons info")
         return None
-    result = {"title": title, "subjectId": sid, "subjectType": 2, "detailPath": dp,
+    result = {"title": title, "is_cam": is_cam_title(title), "subjectId": sid, "subjectType": 2, "detailPath": dp,
               "watch_url": f"{origin}/videoPlayPage/{dp}?type=/movie/detail", "seasons": []}
     for season in seasons:
         se = season.get("se", 0)

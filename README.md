@@ -32,6 +32,13 @@ The same endpoints also run as Vercel serverless functions from `api/` — see
 Every endpoint answers `GET` (plus `OPTIONS` for CORS preflight), returns
 JSON, and sends `Access-Control-Allow-Origin: *`.
 
+**CAM titles.** Some upstream titles carry an inline camcorder-quality
+marker, e.g. `"Forgotten Island[CAM]"` - a cinema-screen recording. The
+marker stays in every `title` the API returns, every item also carries an
+`isCam: true|false` flag, and `/api/movie` + `/api/tv` add a ready-to-use
+`filename` per quality that keeps the marker (`"Forgotten Island[CAM]
+1080P.mp4"`) so instant downloads save the file with the marker intact.
+
 `<detailPath>` is the slug the MovieBox sites use to identify a title (e.g.
 `oppenheimer-Akh5Nrwl7o`). Get one from `/api/search` or `/api/trending`, then
 use it with the other endpoints. For movies, omit `season`/`episode`.
@@ -122,15 +129,23 @@ curl "http://localhost:3000/api/movie?id=oppenheimer-Akh5Nrwl7o"
 ```json
 {
   "title": "Oppenheimer",
+  "isCam": false,
+  "camMarker": null,
   "type": "movie",
   "source": "play",
   "qualities": [
     { "resolution": 1080, "size_mb": 914.9, "codec": "h264", "vipLocked": false,
+      "filename": "Oppenheimer 1080P.mp4",
       "url": "https://bcdnxw.hakunaymatata.com/resource/...mp4?sign=..." }
   ],
-  "best_free": { "resolution": 1080, "size_mb": 914.9, "url": "..." }
+  "best_free": { "resolution": 1080, "size_mb": 914.9,
+    "filename": "Oppenheimer 1080P.mp4", "url": "..." }
 }
 ```
+
+For a CAM copy the same response carries the marker everywhere:
+`"title": "Forgotten Island[CAM]"`, `"isCam": true`, `"camMarker": "[CAM]"`,
+and `"filename": "Forgotten Island[CAM] 1080P.mp4"` per quality.
 
 ### GET /api/tv?id=...&season=1&episode=1
 
@@ -247,6 +262,9 @@ curl "http://localhost:3000/api/episode-matrix?id=oppenheimer-Akh5Nrwl7o"
   needed.
 - **Not every title has every quality.** Check the `qualities` array — and
   `resolutions` per season in `/api/details`.
+- **CAM copies are flagged.** A title like `"Forgotten Island[CAM]"` is a
+  camcorder recording: the marker stays in `title`, `isCam` is `true`, and
+  the per-quality `filename` keeps the marker for downloads.
 - **1080P**: free via the `play` source, VIP-locked via the `download`
   fallback. The `vipLocked` flag marks the difference.
 
