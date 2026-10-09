@@ -489,7 +489,7 @@ function sendLanding(req, res, dlHref, dlFallback, probeUrl, filename, backPath,
       `function goBack(){if(done)return;done=true;` +
       `try{window.close()}catch(e){}` +
       `setTimeout(function(){try{location.replace(BACK||${JSON.stringify(HOME + "/")})}catch(e){}},400)}` +
-      `function tick(n){say('Download started \\u2014 taking you back in '+n+'...');` +
+      `function tick(n){say('Download started - taking you back in '+n+'...');` +
       `if(n>1)setTimeout(function(){tick(n-1)},1000);else setTimeout(goBack,1000)}` +
       `function started(){if(done)return;if(poller)clearInterval(poller);tick(3)}` +
       `try{poller=setInterval(function(){` +

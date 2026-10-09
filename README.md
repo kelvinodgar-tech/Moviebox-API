@@ -3,9 +3,9 @@
 A small JSON API over the MovieBox streaming backend (`h5-api.aoneroom.com`)
 that powers movieboxonline.net, netnaija.film and officialmoviebox.com (all
 three share the same backend). It searches titles, returns metadata, and
-resolves direct MP4 URLs (360P–1080P) and subtitle files.
+resolves direct MP4 URLs (360P-1080P) and subtitle files.
 
-There is no shared public instance — clone the repo and run your own:
+There is no shared public instance - clone the repo and run your own:
 
 ```bash
 git clone https://github.com/kelvinodgar-tech/Moviebox-API.git
@@ -14,7 +14,7 @@ node server.js          # http://localhost:3000
 ```
 
 `server.js` is a plain Node HTTP server with zero npm dependencies (Node 18+).
-The same endpoints also run as Vercel serverless functions from `api/` — see
+The same endpoints also run as Vercel serverless functions from `api/` - see
 [Deploying](#deploying).
 
 ## Endpoints
@@ -38,6 +38,9 @@ marker stays in every `title` the API returns, every item also carries an
 `isCam: true|false` flag, and `/api/movie` + `/api/tv` add a ready-to-use
 `filename` per quality that keeps the marker (`"Forgotten Island[CAM]
 1080P.mp4"`) so instant downloads save the file with the marker intact.
+If you build a download UI on top of this API, surface the flag (or the
+marker) on the download button itself so people can tell a camcorder copy
+from a proper release before they download it.
 
 `<detailPath>` is the slug the MovieBox sites use to identify a title (e.g.
 `oppenheimer-Akh5Nrwl7o`). Get one from `/api/search` or `/api/trending`, then
@@ -89,10 +92,10 @@ available resolutions.
 
 Each entry in `dubs` is one of:
 
-- `kind: "dub"` — a dubbed audio track; get its files by calling `/api/movie`
+- `kind: "dub"` - a dubbed audio track; get its files by calling `/api/movie`
   or `/api/tv` with the dub's own `detailPath`.
-- `kind: "subtitle"` — a subtitle-language variant of the same title.
-- `original: true` — the original-language track.
+- `kind: "subtitle"` - a subtitle-language variant of the same title.
+- `original: true` - the original-language track.
 
 ```bash
 curl "http://localhost:3000/api/details?id=lucifer-UQASHYbVPB2"
@@ -118,7 +121,7 @@ Direct MP4 URLs for every available quality of a movie. Calling it on a TV
 subject returns a `400` pointing at `/api/tv`.
 
 The endpoint tries the backend's `/play` source first (1080P included, free
-but rate-limited to roughly one successful call per 2–3 minutes per IP) and
+but rate-limited to roughly one successful call per 2-3 minutes per IP) and
 falls back to `/download` (where 1080P comes back VIP-locked). The `source`
 field tells you which one answered.
 
@@ -161,7 +164,7 @@ curl "http://localhost:3000/api/tv?id=lucifer-UQASHYbVPB2&season=1&episode=1"
 ### GET /api/subtitles?id=...&season=1&episode=1
 
 Subtitle files for a movie or episode, one per language. Each `url` points at
-a `.srt` file on `cacdn.hakunaymatata.com` — a plain signed link that works
+a `.srt` file on `cacdn.hakunaymatata.com` - a plain signed link that works
 from any HTTP client without special headers.
 
 ```bash
@@ -255,12 +258,12 @@ curl "http://localhost:3000/api/episode-matrix?id=oppenheimer-Akh5Nrwl7o"
   send `Referer: https://movieboxonline.net/` when fetching them or you get
   429. Subtitle URLs have no such check.
 - **Rate limits are real.** The `/play` backend allows ~1 successful call per
-  2–3 minutes per IP; hammering returns empty results. Wait and retry. On a
+  2-3 minutes per IP; hammering returns empty results. Wait and retry. On a
   shared host everyone shares one egress IP.
 - **Signed URLs expire.** Video links live for a few hours, subtitle links
   for days. Store `detailPath` values (they are stable) and re-resolve when
   needed.
-- **Not every title has every quality.** Check the `qualities` array — and
+- **Not every title has every quality.** Check the `qualities` array - and
   `resolutions` per season in `/api/details`.
 - **CAM copies are flagged.** A title like `"Forgotten Island[CAM]"` is a
   camcorder recording: the marker stays in `title`, `isCam` is `true`, and
@@ -271,7 +274,7 @@ curl "http://localhost:3000/api/episode-matrix?id=oppenheimer-Akh5Nrwl7o"
 ## Python scraper
 
 `tools/moviebox_scraper.py` is a standalone, dependency-free (stdlib only)
-CLI scraper for the same backend — useful for bulk jobs where the request
+CLI scraper for the same backend - useful for bulk jobs where the request
 pattern of an HTTP API gets in the way:
 
 ```bash
@@ -327,7 +330,7 @@ Moviebox-API/
 node server.js             # listens on $PORT, default 3000
 ```
 
-**Vercel** — the `api/` directory is already in Vercel's serverless format:
+**Vercel** - the `api/` directory is already in Vercel's serverless format:
 
 ```bash
 npm i -g vercel
